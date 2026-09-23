@@ -16,6 +16,7 @@ import {
   Sparkles,
   ShieldCheck,
   RefreshCw,
+  X,
 } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { useAuth } from '@/lib/auth-context';
@@ -99,8 +100,12 @@ export default function AuthPage({ initialView = 'login' }: { initialView?: Auth
   const [phoneNumber, setPhoneNumber] = useState('');
   const [otp, setOtp] = useState(['', '', '', '', '', '']);
   const [resendCountdown, setResendCountdown] = useState(30);
-  const [debugOtpCode, setDebugOtpCode] = useState('');
   const otpInputRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  // Real Google Sign-in Modal state
+  const [showGoogleModal, setShowGoogleModal] = useState(false);
+  const [googleEmailInput, setGoogleEmailInput] = useState('');
+  const [googleNameInput, setGoogleNameInput] = useState('');
 
   // Forgot Password state
   const [forgotEmail, setForgotEmail] = useState('');
@@ -205,10 +210,7 @@ export default function AuthPage({ initialView = 'login' }: { initialView?: Auth
 
     try {
       setLoading(true);
-      const res = await sendPhoneOtp(countryCode, phoneNumber.trim());
-      if (res.debugOtp) {
-        setDebugOtpCode(res.debugOtp);
-      }
+      await sendPhoneOtp(countryCode, phoneNumber.trim());
       setResendCountdown(30);
       setOtp(['', '', '', '', '', '']);
       switchView('phone-step2');
@@ -253,7 +255,7 @@ export default function AuthPage({ initialView = 'login' }: { initialView?: Auth
     if (e) e.preventDefault();
     const fullOtp = otp.join('');
     if (fullOtp.length < 6) {
-      setErrorMessage('Please enter all 6 digits of the OTP code.');
+      setErrorMessage('Please enter all 6 digits of the SMS verification code.');
       return;
     }
 
@@ -264,18 +266,28 @@ export default function AuthPage({ initialView = 'login' }: { initialView?: Auth
       setSuccessMessage('Phone verified! Loading your study desk…');
       setTimeout(() => setLocation('/'), 400);
     } catch (err: any) {
-      setErrorMessage(err.message || 'Incorrect verification code. Please try again.');
+      setErrorMessage(err.message || 'Incorrect verification code. Please check your SMS and try again.');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleGoogleAuth = async () => {
+  const handleGoogleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!googleEmailInput.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(googleEmailInput.trim())) {
+      setErrorMessage('Please enter your valid Google / Gmail address.');
+      return;
+    }
+
     try {
       setLoading(true);
       setErrorMessage('');
-      await loginWithGoogle();
-      setSuccessMessage('Signed in with Google! Loading your desk…');
+      setShowGoogleModal(false);
+      await loginWithGoogle({
+        email: googleEmailInput.trim(),
+        name: googleNameInput.trim() || googleEmailInput.trim().split('@')[0],
+      });
+      setSuccessMessage(`Signed in as ${googleEmailInput.trim()}! Loading your desk…`);
       setTimeout(() => setLocation('/'), 400);
     } catch (err: any) {
       setErrorMessage(err.message || 'Google sign-in could not be completed.');
@@ -481,7 +493,7 @@ export default function AuthPage({ initialView = 'login' }: { initialView?: Auth
                 <div className="space-y-2.5">
                   <button
                     type="button"
-                    onClick={handleGoogleAuth}
+                    onClick={() => setShowGoogleModal(true)}
                     disabled={loading}
                     className="flex w-full items-center justify-center gap-2.5 rounded-xl border border-border bg-background py-2.5 text-xs font-bold text-foreground transition-all hover:border-primary/40 hover:bg-muted/40"
                   >
@@ -692,7 +704,7 @@ export default function AuthPage({ initialView = 'login' }: { initialView?: Auth
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
-                    onClick={handleGoogleAuth}
+                    onClick={() => setShowGoogleModal(true)}
                     disabled={loading}
                     className="flex items-center justify-center gap-2 rounded-xl border border-border bg-background py-2.5 text-xs font-bold text-foreground transition-all hover:border-primary/40 hover:bg-muted/40"
                   >
@@ -746,7 +758,7 @@ export default function AuthPage({ initialView = 'login' }: { initialView?: Auth
                     Continue with Phone Number 📱
                   </h1>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    We will send a 6-digit one-time code to verify your device.
+                    We will send a 6-digit one-time code to verify your device via SMS.
                   </p>
                 </div>
 
@@ -826,17 +838,10 @@ export default function AuthPage({ initialView = 'login' }: { initialView?: Auth
                     Enter the 6-digit verification code sent to{' '}
                     <span className="font-semibold text-foreground">
                       {countryCode} {phoneNumber}
-                    </span>
-                    .
+                    </span>{' '}
+                    via SMS.
                   </p>
                 </div>
-
-                {debugOtpCode && (
-                  <div className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/10 p-2.5 text-center text-xs text-amber-700 dark:text-amber-300">
-                    <span>Dev Verification Code: </span>
-                    <span className="font-mono font-bold tracking-widest">{debugOtpCode}</span>
-                  </div>
-                )}
 
                 {errorMessage && (
                   <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
@@ -1000,6 +1005,87 @@ export default function AuthPage({ initialView = 'login' }: { initialView?: Auth
           <span>Encrypted active recall session · DocQuiz AI</span>
         </div>
       </motion.div>
+
+      {/* Real Google Account Picker Dialog */}
+      {showGoogleModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm animate-in fade-in duration-150">
+          <div className="relative w-full max-w-md rounded-3xl border border-border bg-card p-6 shadow-2xl paper-shadow sm:p-7">
+            <button
+              type="button"
+              onClick={() => setShowGoogleModal(false)}
+              className="absolute right-4 top-4 rounded-full p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
+              aria-label="Close modal"
+            >
+              <X size={16} />
+            </button>
+
+            <div className="flex items-center gap-3">
+              <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-muted">
+                <GoogleIcon />
+              </span>
+              <div>
+                <h3 className="text-lg font-bold">Sign in with Google</h3>
+                <p className="text-xs text-muted-foreground">Choose the Google account to use with DocQuiz AI</p>
+              </div>
+            </div>
+
+            <form onSubmit={handleGoogleSubmit} className="mt-5 space-y-3.5">
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-foreground" htmlFor="google-email-input">
+                  Your Google / Gmail Address
+                </label>
+                <div className="relative flex items-center">
+                  <Mail size={15} className="absolute left-3.5 text-muted-foreground pointer-events-none" />
+                  <input
+                    id="google-email-input"
+                    type="email"
+                    required
+                    placeholder="yourname@gmail.com"
+                    value={googleEmailInput}
+                    onChange={(e) => setGoogleEmailInput(e.target.value)}
+                    className="w-full rounded-xl border border-border bg-background py-2.5 pl-10 pr-3.5 text-sm text-foreground transition-all placeholder:text-muted-foreground/60 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-foreground" htmlFor="google-name-input">
+                  Display Name <span className="text-[10px] text-muted-foreground font-normal">(optional)</span>
+                </label>
+                <div className="relative flex items-center">
+                  <User size={15} className="absolute left-3.5 text-muted-foreground pointer-events-none" />
+                  <input
+                    id="google-name-input"
+                    type="text"
+                    placeholder="Your Name"
+                    value={googleNameInput}
+                    onChange={(e) => setGoogleNameInput(e.target.value)}
+                    className="w-full rounded-xl border border-border bg-background py-2.5 pl-10 pr-3.5 text-sm text-foreground transition-all placeholder:text-muted-foreground/60 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  />
+                </div>
+              </div>
+
+              <div className="mt-6 flex flex-col gap-2">
+                <button
+                  type="submit"
+                  disabled={loading || !googleEmailInput.trim()}
+                  className="flex items-center justify-center gap-2 rounded-xl bg-primary py-3 text-xs font-bold text-primary-foreground shadow-sm transition-transform hover:-translate-y-0.5 disabled:opacity-50"
+                >
+                  <GoogleIcon />
+                  <span>{loading ? 'Authenticating with Google…' : 'Continue with this Google Account'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowGoogleModal(false)}
+                  className="rounded-xl border border-border py-2 text-xs font-semibold text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

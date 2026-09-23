@@ -178,8 +178,9 @@ export const authService = {
     };
   },
 
-  async sendPhoneOtp(countryCode: string, phoneNumber: string): Promise<{ message: string; phone: string; expiresInSeconds: number; debugOtp?: string }> {
-    const fullPhone = `${countryCode || '+1'} ${phoneNumber.trim()}`;
+  async sendPhoneOtp(countryCode: string, phoneNumber: string): Promise<{ message: string; phone: string; expiresInSeconds: number }> {
+    const cleanNumber = phoneNumber.replace(/[^\d]/g, '');
+    const fullPhone = `${countryCode || '+1'}${cleanNumber}`;
     const generatedOtp = Math.floor(100000 + Math.random() * 900000).toString();
 
     try {
@@ -200,15 +201,15 @@ export const authService = {
     localStorage.setItem(LOCAL_OTP_KEY, JSON.stringify({ phone: fullPhone, otp: generatedOtp, expires: Date.now() + 300000 }));
 
     return {
-      message: `OTP sent to ${fullPhone}`,
-      phone: fullPhone,
+      message: `OTP sent to ${countryCode || '+1'} ${phoneNumber.trim()}`,
+      phone: `${countryCode || '+1'} ${phoneNumber.trim()}`,
       expiresInSeconds: 300,
-      debugOtp: generatedOtp,
     };
   },
 
   async verifyPhoneOtp(countryCode: string, phoneNumber: string, otp: string): Promise<{ token: string; user: AuthUser }> {
-    const fullPhone = `${countryCode || '+1'} ${phoneNumber.trim()}`;
+    const cleanNumber = phoneNumber.replace(/[^\d]/g, '');
+    const fullPhone = `${countryCode || '+1'}${cleanNumber}`;
 
     try {
       const res = await fetch(`${API_BASE}/phone/verify-otp`, {
@@ -236,7 +237,7 @@ export const authService = {
     if (rawOtp) {
       try {
         const parsed = JSON.parse(rawOtp);
-        if (parsed.otp !== otp.trim() && otp.trim() !== '123456') {
+        if (parsed.otp !== otp.trim()) {
           throw new Error('Invalid verification code. Please check and try again.');
         }
       } catch (e: any) {
@@ -247,11 +248,12 @@ export const authService = {
     const users = getLocalUsers();
     let user = users.find((u) => u.phone === fullPhone);
     if (!user) {
+      const displayPhone = `${countryCode || '+1'} ${cleanNumber}`;
       user = {
         id: `usr_phone_${Date.now()}`,
-        name: `Student (${fullPhone.slice(-4)})`,
-        email: `student_${phoneNumber.replace(/\D/g, '').slice(-4)}@docquiz.user`,
-        phone: fullPhone,
+        name: `Student (${cleanNumber.slice(-4)})`,
+        email: `phone_${cleanNumber.slice(-6)}@docquiz.user`,
+        phone: displayPhone,
         provider: 'phone',
         createdAt: new Date().toISOString(),
       };
@@ -265,12 +267,20 @@ export const authService = {
     };
   },
 
-  async googleAuth(params?: { email?: string; name?: string; avatarUrl?: string }): Promise<{ token: string; user: AuthUser }> {
+  async googleAuth(params: { email: string; name?: string; avatarUrl?: string }): Promise<{ token: string; user: AuthUser }> {
+    if (!params.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(params.email.trim())) {
+      throw new Error('Please enter a valid Google email address.');
+    }
+
+    const email = params.email.trim().toLowerCase();
+    const name = params.name?.trim() || email.split('@')[0];
+    const avatarUrl = params.avatarUrl || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(name)}`;
+
     try {
       const res = await fetch(`${API_BASE}/google`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(params || {}),
+        body: JSON.stringify({ email, name, avatarUrl }),
       });
 
       if (res.ok) {
@@ -280,12 +290,8 @@ export const authService = {
       // Fallback
     }
 
-    const email = params?.email || 'scholar.google@docquiz.ai';
-    const name = params?.name || 'Google Scholar';
-    const avatarUrl = params?.avatarUrl || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80';
-
     const users = getLocalUsers();
-    let user = users.find((u) => u.email.toLowerCase() === email.toLowerCase());
+    let user = users.find((u) => u.email.toLowerCase() === email);
     if (!user) {
       user = {
         id: `usr_google_${Date.now()}`,
@@ -304,6 +310,7 @@ export const authService = {
       user,
     };
   },
+
 
   async forgotPassword(email: string): Promise<{ message: string; email: string; status: string }> {
     try {

@@ -13,7 +13,7 @@ interface AuthContextType {
   register: (name: string, email: string, phone: string, password: string) => Promise<AuthUser>;
   sendPhoneOtp: (countryCode: string, phoneNumber: string) => Promise<{ message: string; phone: string; expiresInSeconds: number; debugOtp?: string }>;
   verifyPhoneOtp: (countryCode: string, phoneNumber: string, otp: string) => Promise<AuthUser>;
-  loginWithGoogle: () => Promise<AuthUser>;
+  loginWithGoogle: (params: { email: string; name?: string; avatarUrl?: string }) => Promise<AuthUser>;
   demoLogin: () => Promise<AuthUser>;
   forgotPassword: (email: string) => Promise<{ message: string; email: string }>;
   logout: () => Promise<void>;
@@ -79,16 +79,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return newUser;
   };
 
-  const loginWithGoogle = async () => {
-    // In production, initiate OAuth popup or redirect flow. Here we connect to Google Auth backend endpoint
-    const { token: newToken, user: newUser } = await authService.googleAuth({
-      email: 'student.google@docquiz.ai',
-      name: 'Google Scholar',
-      avatarUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
-    });
+  const loginWithGoogle = async (params: { email: string; name?: string; avatarUrl?: string }) => {
+    const { token: newToken, user: newUser } = await authService.googleAuth(params);
     saveSession(newToken, newUser);
     return newUser;
   };
+
 
   const demoLogin = async () => {
     return login('alex.morgan@docquiz.ai', 'DocQuiz2026!');

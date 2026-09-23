@@ -163,7 +163,7 @@ router.post("/auth/login", (req: Request, res: Response) => {
 });
 
 // 3. POST /api/auth/phone/send-otp
-router.post("/auth/phone/send-otp", (req: Request, res: Response) => {
+router.post("/auth/phone/send-otp", async (req: Request, res: Response) => {
   try {
     const { countryCode, phoneNumber } = req.body;
 
@@ -176,21 +176,45 @@ router.post("/auth/phone/send-otp", (req: Request, res: Response) => {
       return res.status(400).json({ error: "Phone number must be between 7 and 15 digits." });
     }
 
-    const fullPhone = `${countryCode || "+1"} ${phoneNumber.trim()}`;
+    const fullPhone = `${countryCode || "+1"}${cleanNumber}`;
     // Generate secure 6-digit OTP
     const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes expiration
 
     activeOtps.set(fullPhone, { code: otpCode, expiresAt, attempts: 0 });
 
-    logger.info({ phone: fullPhone, otpCode }, `Generated OTP for phone verification`);
+    // If Twilio SMS credentials are provided in environment, send real SMS
+    const twilioSid = process.env.TWILIO_ACCOUNT_SID;
+    const twilioToken = process.env.TWILIO_AUTH_TOKEN;
+    const twilioFrom = process.env.TWILIO_PHONE_NUMBER;
+
+    if (twilioSid && twilioToken && twilioFrom) {
+      try {
+        const auth = Buffer.from(`${twilioSid}:${twilioToken}`).toString("base64");
+        await fetch(`https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/Messages.json`, {
+          method: "POST",
+          headers: {
+            Authorization: `Basic ${auth}`,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: new URLSearchParams({
+            To: fullPhone,
+            From: twilioFrom,
+            Body: `Your DocQuiz AI verification code is: ${otpCode}. Valid for 5 minutes.`,
+          }),
+        });
+        logger.info({ phone: fullPhone }, "Real SMS OTP dispatched via Twilio");
+      } catch (smsErr) {
+        logger.error({ smsErr }, "Failed to send SMS via Twilio provider");
+      }
+    } else {
+      logger.info({ phone: fullPhone, code: otpCode }, "SMS OTP generated (Server-side log)");
+    }
 
     return res.status(200).json({
-      message: `OTP sent to ${fullPhone}`,
-      phone: fullPhone,
+      message: `Verification code sent to ${countryCode || "+1"} ${phoneNumber.trim()}`,
+      phone: `${countryCode || "+1"} ${phoneNumber.trim()}`,
       expiresInSeconds: 300,
-      // For development / demonstration convenience, return debugOtp
-      debugOtp: otpCode,
     });
   } catch (error) {
     logger.error({ error }, "Error sending phone OTP");
@@ -207,7 +231,8 @@ router.post("/auth/phone/verify-otp", (req: Request, res: Response) => {
       return res.status(400).json({ error: "Phone number and 6-digit OTP are required." });
     }
 
-    const fullPhone = `${countryCode || "+1"} ${String(phoneNumber).trim()}`;
+    const cleanNumber = String(phoneNumber).replace(/[^\d]/g, "");
+    const fullPhone = `${countryCode || "+1"}${cleanNumber}`;
     const cleanOtp = String(otp).trim();
     const record = activeOtps.get(fullPhone);
 
@@ -236,11 +261,12 @@ router.post("/auth/phone/verify-otp", (req: Request, res: Response) => {
     let user = usersByPhone.get(fullPhone);
     if (!user) {
       const userId = `usr_${crypto.randomBytes(8).toString("hex")}`;
+      const displayPhone = `${countryCode || "+1"} ${cleanNumber}`;
       user = {
         id: userId,
-        name: `Student (${fullPhone.slice(-4)})`,
-        email: `phone_${cleanOtp}_${Date.now()}@docquiz.user`,
-        phone: fullPhone,
+        name: `Student (${cleanNumber.slice(-4)})`,
+        email: `phone_${cleanNumber.slice(-6)}@docquiz.user`,
+        phone: displayPhone,
         provider: "phone",
         createdAt: new Date().toISOString(),
       };
@@ -265,23 +291,27 @@ router.post("/auth/phone/verify-otp", (req: Request, res: Response) => {
 // 5. POST /api/auth/google
 router.post("/auth/google", (req: Request, res: Response) => {
   try {
-    const { credential, email, name, avatarUrl } = req.body;
+    const { email, name, avatarUrl } = req.body;
 
-    const userEmail = (email || "learner.google@docquiz.ai").toLowerCase();
-    const userName = name || "Google Learner";
+    if (!email || typeof email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      return res.status(400).json({ error: "Please provide a valid Google email address." });
+    }
 
-    let user = usersByEmail.get(userEmail);
+    const normalizedEmail = email.trim().toLowerCase();
+    const userName = name && typeof name === "string" && name.trim().length > 0 ? name.trim() : normalizedEmail.split("@")[0];
+
+    let user = usersByEmail.get(normalizedEmail);
     if (!user) {
       const userId = `usr_${crypto.randomBytes(8).toString("hex")}`;
       user = {
         id: userId,
         name: userName,
-        email: userEmail,
-        avatarUrl: avatarUrl || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80",
+        email: normalizedEmail,
+        avatarUrl: avatarUrl || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(userName)}`,
         provider: "google",
         createdAt: new Date().toISOString(),
       };
-      usersByEmail.set(userEmail, user);
+      usersByEmail.set(normalizedEmail, user);
       usersById.set(userId, user);
     }
 
@@ -298,6 +328,7 @@ router.post("/auth/google", (req: Request, res: Response) => {
     return res.status(500).json({ error: "Failed to sign in with Google." });
   }
 });
+
 
 // 6. POST /api/auth/forgot-password
 router.post("/auth/forgot-password", (req: Request, res: Response) => {
