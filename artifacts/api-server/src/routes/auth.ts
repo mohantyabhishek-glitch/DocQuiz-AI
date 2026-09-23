@@ -288,6 +288,7 @@ router.post("/auth/phone/verify-otp", (req: Request, res: Response) => {
   }
 });
 
+import "../lib/env";
 import nodemailer from "nodemailer";
 
 // In-memory active Email OTP store: email -> { code, expiresAt, attempts }
@@ -297,8 +298,10 @@ const activeEmailOtps = new Map<string, { code: string; expiresAt: number; attem
 function createEmailTransporter() {
   const host = process.env.SMTP_HOST || process.env.GMAIL_SMTP_HOST;
   const port = parseInt(process.env.SMTP_PORT || "587", 10);
-  const user = process.env.SMTP_USER || process.env.GMAIL_USER;
-  const pass = process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD;
+  const user = (process.env.SMTP_USER || process.env.GMAIL_USER || "").trim();
+  const rawPass = process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD || "";
+  // Google app passwords may contain spaces like 'jxdz dgdj jbov ndqs'; strip all spaces
+  const pass = rawPass.replace(/\s+/g, "").trim();
 
   if (host && user && pass) {
     return nodemailer.createTransport({
