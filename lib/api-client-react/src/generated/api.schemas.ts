@@ -32,13 +32,13 @@ export interface ExtractedDocument {
 export interface QuizGenerationInput {
   /**
      * @minLength 80
-     * @maxLength 120000
+     * @maxLength 5000000
      */
   text: string;
   fileName?: string;
   /**
-     * @minimum 3
-     * @maximum 10
+     * @minimum 1
+     * @maximum 30
      */
   questionCount: number;
 }

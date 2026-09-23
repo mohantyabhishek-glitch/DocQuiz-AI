@@ -41,17 +41,16 @@ export const ExtractDocumentResponse = zod.object({
  * @summary Generate an interactive quiz
  */
 export const generateQuizBodyTextMin = 80;
-export const generateQuizBodyTextMax = 120000;
+export const generateQuizBodyTextMax = 5000000;
 
-export const generateQuizBodyQuestionCountMin = 3;
-export const generateQuizBodyQuestionCountMax = 10;
+export const generateQuizBodyQuestionCountMax = 30;
 
 
 
 export const GenerateQuizBody = zod.object({
   "text": zod.string().min(generateQuizBodyTextMin).max(generateQuizBodyTextMax),
   "fileName": zod.string().optional(),
-  "questionCount": zod.number().int().min(generateQuizBodyQuestionCountMin).max(generateQuizBodyQuestionCountMax)
+  "questionCount": zod.number().int().min(1).max(generateQuizBodyQuestionCountMax)
 })
 
 export const generateQuizResponseQuestionsItemOptionsMin = 4;

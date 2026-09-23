@@ -3,7 +3,10 @@
   "version": "0.0.0",
   "license": "MIT",
   "scripts": {
-    "preinstall": "sh -c 'rm -f package-lock.json yarn.lock; case \"$npm_config_user_agent\" in pnpm/*) ;; *) echo \"Use pnpm instead\" >&2; exit 1 ;; esac'",
+    "dev": "concurrently -k -p \"[{name}]\" -n \"API,WEB\" -c \"cyan,magenta\" \"pnpm --filter @workspace/api-server run dev\" \"pnpm --filter @workspace/docquiz-ai run dev\"",
+    "dev:all": "concurrently -k -p \"[{name}]\" -n \"API,WEB\" -c \"cyan,magenta\" \"pnpm --filter @workspace/api-server run dev\" \"pnpm --filter @workspace/docquiz-ai run dev\"",
+    "dev:frontend": "pnpm --filter @workspace/docquiz-ai run dev",
+    "dev:api": "pnpm --filter @workspace/api-server run dev",
     "build": "pnpm run typecheck && pnpm -r --if-present run build",
     "typecheck:libs": "tsc --build",
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
@@ -13,6 +16,7 @@
     "@replit/connectors-sdk": "^0.4.3"
   },
   "devDependencies": {
+    "concurrently": "^10.0.5",
     "prettier": "^3.9.6",
     "typescript": "~5.9.3"
   }

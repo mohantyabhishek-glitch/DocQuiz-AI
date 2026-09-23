@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, ArrowRight, Check, CircleAlert, RotateCcw, Sparkles, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, CircleAlert, RotateCcw, Sparkles, X, Loader2 } from 'lucide-react';
 import { Link } from 'wouter';
+import { useGenerateQuiz } from '@workspace/api-client-react';
 import type { Quiz, QuizQuestion } from '@workspace/api-client-react';
 import { AppShell } from '@/components/app-shell';
-import { readQuiz } from '@/lib/storage';
+import { readDocument, readQuiz, writeQuiz } from '@/lib/storage';
 
 function letter(index: number): string {
   return String.fromCharCode(65 + index);
@@ -33,7 +34,23 @@ function EmptyQuiz() {
   );
 }
 
-function Results({ quiz, answers, onRestart }: { quiz: Quiz; answers: (number | null)[]; onRestart: () => void }) {
+function Results({
+  quiz,
+  answers,
+  onRestart,
+  onGenerateNew,
+  isGeneratingNew,
+  questionCount,
+  setQuestionCount,
+}: {
+  quiz: Quiz;
+  answers: (number | null)[];
+  onRestart: () => void;
+  onGenerateNew: () => void;
+  isGeneratingNew: boolean;
+  questionCount: number;
+  setQuestionCount: (count: number) => void;
+}) {
   const score = quiz.questions.reduce((total, question, index) => total + (answers[index] === question.correctAnswerIndex ? 1 : 0), 0);
   const percentage = quiz.questions.length ? Math.round((score / quiz.questions.length) * 100) : 0;
 
@@ -49,14 +66,52 @@ function Results({ quiz, answers, onRestart }: { quiz: Quiz; answers: (number | 
           <Link href="/" className="hidden items-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-xs font-bold text-muted-foreground transition-colors hover:text-foreground sm:flex" data-testid="link-new-notes"><ArrowLeft size={14} /> New notes</Link>
         </div>
 
-        <div className="grid gap-5 md:grid-cols-[.75fr_1.25fr]">
-          <section className="fade-up fade-up-delay-1 rounded-[22px] bg-secondary p-7 text-secondary-foreground paper-shadow sm:p-9">
+        <div className="grid gap-5 md:grid-cols-[.85fr_1.15fr]">
+          <section className="fade-up fade-up-delay-1 flex flex-col rounded-[22px] bg-secondary p-7 text-secondary-foreground paper-shadow sm:p-9">
             <p className="font-mono-ui text-[10px] uppercase tracking-[.18em] text-secondary-foreground/55">Your score</p>
-            <div className="mt-8 flex items-end gap-2"><span className="font-display text-8xl leading-none text-[hsl(var(--accent))]">{score}</span><span className="mb-2 text-sm text-secondary-foreground/55">/ {quiz.questions.length}</span></div>
-            <p className="mt-5 text-lg font-bold">{scoreLabel(score, quiz.questions.length)}</p>
-            <div className="mt-7 h-1.5 overflow-hidden rounded-full bg-secondary-foreground/15"><div className="h-full rounded-full bg-[hsl(var(--accent))] transition-all" style={{ width: `${percentage}%` }} /></div>
+            <div className="mt-6 flex items-end gap-2"><span className="font-display text-8xl leading-none text-[hsl(var(--accent))]">{score}</span><span className="mb-2 text-sm text-secondary-foreground/55">/ {quiz.questions.length}</span></div>
+            <p className="mt-4 text-lg font-bold">{scoreLabel(score, quiz.questions.length)}</p>
+            <div className="mt-6 h-1.5 overflow-hidden rounded-full bg-secondary-foreground/15"><div className="h-full rounded-full bg-[hsl(var(--accent))] transition-all" style={{ width: `${percentage}%` }} /></div>
             <p className="mt-2 text-right font-mono-ui text-[10px] uppercase tracking-wider text-secondary-foreground/55">{percentage}% correct</p>
-            <button onClick={onRestart} className="mt-10 flex w-full items-center justify-center gap-2 rounded-xl bg-[hsl(var(--accent))] px-4 py-3 text-sm font-bold text-accent-foreground transition-transform hover:-translate-y-0.5" data-testid="button-restart-quiz"><RotateCcw size={15} /> Study it again</button>
+
+            <div className="mt-8 space-y-3">
+              <div className="rounded-xl bg-secondary-foreground/10 p-3">
+                <label className="text-[11px] font-semibold text-secondary-foreground/80 block mb-1.5">Next quiz length:</label>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {[3, 5, 7, 10].map((count) => (
+                    <button
+                      key={count}
+                      type="button"
+                      onClick={() => setQuestionCount(count)}
+                      className={`rounded-lg py-1.5 text-xs font-bold transition-all ${
+                        questionCount === count
+                          ? 'bg-[hsl(var(--accent))] text-accent-foreground font-black shadow-sm'
+                          : 'bg-secondary-foreground/15 text-secondary-foreground/80 hover:bg-secondary-foreground/25'
+                      }`}
+                    >
+                      {count} Qs
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <button
+                onClick={onGenerateNew}
+                disabled={isGeneratingNew}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-[hsl(var(--accent))] px-4 py-3.5 text-sm font-bold text-accent-foreground transition-transform hover:-translate-y-0.5 disabled:opacity-50"
+                data-testid="button-new-questions"
+              >
+                <Sparkles size={16} /> {isGeneratingNew ? 'Building new questions…' : `Get New Questions (${questionCount} Qs)`}
+              </button>
+
+              <button
+                onClick={onRestart}
+                className="flex w-full items-center justify-center gap-2 rounded-xl border border-secondary-foreground/20 px-4 py-2.5 text-xs font-bold text-secondary-foreground/80 transition-colors hover:bg-secondary-foreground/10 hover:text-secondary-foreground"
+                data-testid="button-restart-quiz"
+              >
+                <RotateCcw size={14} /> Retake this exact quiz
+              </button>
+            </div>
           </section>
 
           <section className="fade-up fade-up-delay-2 rounded-[22px] border border-border bg-card p-6 paper-shadow sm:p-8">
@@ -64,7 +119,7 @@ function Results({ quiz, answers, onRestart }: { quiz: Quiz; answers: (number | 
               <div><p className="font-mono-ui text-[10px] uppercase tracking-[.18em] text-muted-foreground">Answer key</p><h2 className="mt-1 text-lg font-bold">A quick review</h2></div>
               <span className="rounded-full bg-muted px-3 py-1.5 font-mono-ui text-[10px] text-muted-foreground">{score} right</span>
             </div>
-            <div className="space-y-2">
+            <div className="space-y-2 max-h-[480px] overflow-y-auto pr-1">
               {quiz.questions.map((question, index) => {
                 const correct = answers[index] === question.correctAnswerIndex;
                 return (
@@ -128,12 +183,34 @@ export default function QuizPage() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [answers, setAnswers] = useState<(number | null)[]>([]);
   const [complete, setComplete] = useState(false);
+  const [questionCount, setQuestionCount] = useState(5);
+  const generateQuiz = useGenerateQuiz();
 
   useEffect(() => {
     const savedQuiz = readQuiz();
     setQuiz(savedQuiz);
-    if (savedQuiz) setAnswers(Array(savedQuiz.questions.length).fill(null));
+    if (savedQuiz) {
+      setAnswers(Array(savedQuiz.questions.length).fill(null));
+      setQuestionCount(savedQuiz.questions.length);
+    }
   }, []);
+
+  const handleGenerateNew = (overrideCount?: number) => {
+    const doc = readDocument();
+    if (!doc || doc.text.trim().length < 80) return;
+    const targetCount = overrideCount ?? questionCount;
+    generateQuiz.mutate({
+      data: { text: doc.text, fileName: doc.fileName, questionCount: targetCount },
+    }, {
+      onSuccess: (newQuiz) => {
+        writeQuiz(newQuiz);
+        setQuiz(newQuiz);
+        setCurrentIndex(0);
+        setAnswers(Array(newQuiz.questions.length).fill(null));
+        setComplete(false);
+      },
+    });
+  };
 
   const currentQuestion = useMemo(() => quiz?.questions[currentIndex], [quiz, currentIndex]);
   if (!quiz || !currentQuestion) return <EmptyQuiz />;
@@ -153,7 +230,19 @@ export default function QuizPage() {
     setComplete(false);
   };
 
-  if (complete) return <Results quiz={quiz} answers={answers} onRestart={restart} />;
+  if (complete) {
+    return (
+      <Results
+        quiz={quiz}
+        answers={answers}
+        onRestart={restart}
+        onGenerateNew={() => handleGenerateNew()}
+        isGeneratingNew={generateQuiz.isPending}
+        questionCount={questionCount}
+        setQuestionCount={setQuestionCount}
+      />
+    );
+  }
 
   return (
     <AppShell>
@@ -165,7 +254,20 @@ export default function QuizPage() {
             <p className="mt-1 truncate text-xs text-muted-foreground" data-testid="text-quiz-source">{quiz.sourceFileName}</p>
             {quiz.isDemo && <p className="mt-2 text-[11px] text-[hsl(35_65%_43%)]">Local fallback quiz — connect a valid OpenAI key for AI-generated questions.</p>}
           </div>
-          <Link href="/" className="flex shrink-0 items-center gap-2 rounded-xl border border-border bg-card px-3.5 py-2.5 text-xs font-bold text-muted-foreground transition-colors hover:text-foreground" data-testid="link-quiz-home"><ArrowLeft size={14} /> <span className="hidden sm:inline">Study desk</span></Link>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              onClick={() => handleGenerateNew()}
+              disabled={generateQuiz.isPending}
+              className="flex items-center gap-1.5 rounded-xl border border-primary/30 bg-primary/10 px-3.5 py-2.5 text-xs font-bold text-primary transition-all hover:bg-primary/20 disabled:opacity-50"
+              data-testid="button-header-new-quiz"
+            >
+              {generateQuiz.isPending ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+              <span>Get New Questions</span>
+            </button>
+            <Link href="/" className="flex items-center gap-2 rounded-xl border border-border bg-card px-3.5 py-2.5 text-xs font-bold text-muted-foreground transition-colors hover:text-foreground" data-testid="link-quiz-home">
+              <ArrowLeft size={14} /> <span className="hidden sm:inline">Study desk</span>
+            </Link>
+          </div>
         </div>
         <QuestionCard question={currentQuestion} questionNumber={currentIndex + 1} total={quiz.questions.length} selected={selected} onSelect={selectAnswer} onNext={next} />
       </div>

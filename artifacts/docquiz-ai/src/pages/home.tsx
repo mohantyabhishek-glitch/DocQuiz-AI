@@ -22,6 +22,8 @@ export default function Home() {
   const [document, setDocument] = useState<ExtractedDocument | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [questionCount, setQuestionCount] = useState(5);
+  const [customCount, setCustomCount] = useState('');
+  const [showCountModal, setShowCountModal] = useState(false);
   const [uploadError, setUploadError] = useState('');
   const extractDocument = useExtractDocument();
   const generateQuiz = useGenerateQuiz();
@@ -34,8 +36,9 @@ export default function Home() {
     if (!file) return;
     setUploadError('');
     const extension = file.name.split('.').pop()?.toLowerCase();
-    if (extension !== 'pdf' && extension !== 'txt') {
-      setUploadError('Choose a PDF or TXT file to continue.');
+    const supportedExtensions = ['pdf', 'txt', 'docx', 'doc', 'md', 'markdown', 'csv', 'json', 'rtf', 'log'];
+    if (!extension || !supportedExtensions.includes(extension)) {
+      setUploadError('Choose a PDF, DOCX, DOC, TXT, or MD file to continue.');
       return;
     }
     const formData = new FormData();
@@ -49,6 +52,9 @@ export default function Home() {
       onSuccess: (result) => {
         writeDocument(result);
         setDocument(result);
+        if (result.text.trim().length >= 80) {
+          setShowCountModal(true);
+        }
       },
     });
   };
@@ -60,13 +66,15 @@ export default function Home() {
     upload(event.dataTransfer.files[0]);
   };
 
-  const createQuiz = () => {
+  const createQuiz = (countOverride?: number) => {
+    const finalCount = countOverride ?? questionCount;
     if (!document || document.text.trim().length < 80) return;
     generateQuiz.mutate({
-      data: { text: document.text, fileName: document.fileName, questionCount },
+      data: { text: document.text, fileName: document.fileName, questionCount: finalCount },
     }, {
       onSuccess: (quiz) => {
         writeQuiz(quiz);
+        setShowCountModal(false);
         setLocation('/quiz');
       },
     });
@@ -83,7 +91,7 @@ export default function Home() {
           <div className="fade-up">
             <p className="font-mono-ui mb-3 flex items-center gap-2 text-[10px] uppercase tracking-[.22em] text-primary"><span className="h-px w-5 bg-primary" /> Study desk / 01</p>
             <h1 className="max-w-xl text-[clamp(2.5rem,5vw,4.5rem)] leading-[.94] tracking-[-.045em] text-foreground">Read less.<br /><span className="font-display italic text-primary">Recall more.</span></h1>
-            <p className="mt-5 max-w-md text-[15px] leading-7 text-muted-foreground">Drop in your notes. Your tutor will find the ideas worth remembering and turn them into a focused quiz.</p>
+            <p className="mt-5 max-w-md text-[15px] leading-7 text-muted-foreground">Drop in your notes or documents. Your tutor will find the ideas worth remembering and turn them into a focused quiz.</p>
           </div>
           <div className="fade-up fade-up-delay-1 flex items-center gap-2 self-start rounded-full border border-border bg-card px-3 py-2 text-xs text-muted-foreground lg:mb-1 lg:self-auto">
             <ShieldCheck size={14} className="text-[hsl(165_38%_42%)]" /> Your notes stay in this study session
@@ -100,15 +108,22 @@ export default function Home() {
               onDrop={handleDrop}
               data-testid="dropzone-document"
             >
-              <input ref={inputRef} type="file" accept=".pdf,.txt,application/pdf,text/plain" className="hidden" onChange={handleFileInput} data-testid="input-document" />
+              <input
+                ref={inputRef}
+                type="file"
+                accept=".pdf,.txt,.docx,.doc,.md,.markdown,.csv,.json,.rtf,application/pdf,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword"
+                className="hidden"
+                onChange={handleFileInput}
+                data-testid="input-document"
+              />
               <div className="relative flex min-h-[248px] flex-col items-center justify-center text-center">
                 <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-[hsl(var(--accent)/.45)] text-secondary shadow-sm">
                   {isUploading ? <Loader2 size={27} className="animate-spin" /> : <UploadCloud size={27} strokeWidth={1.7} />}
                 </div>
                 <h2 className="text-lg font-bold tracking-[-.02em]">{isUploading ? 'Reading your notes…' : 'Bring your notes to the desk'}</h2>
-                <p className="mt-2 max-w-xs text-sm leading-6 text-muted-foreground">{isUploading ? 'Pulling out the useful bits. This usually takes a moment.' : 'Drag and drop a PDF or TXT file here, or browse your files.'}</p>
+                <p className="mt-2 max-w-xs text-sm leading-6 text-muted-foreground">{isUploading ? 'Pulling out the useful bits. This usually takes a moment.' : 'Drag and drop a PDF, Word document, or TXT file here, or browse your files.'}</p>
                 {!isUploading && <span className="mt-6 inline-flex items-center gap-2 rounded-full bg-secondary px-4 py-2.5 text-xs font-bold text-secondary-foreground"><FilePlus2 size={14} /> Choose a file</span>}
-                <p className="font-mono-ui mt-5 text-[10px] uppercase tracking-[.16em] text-muted-foreground/70">PDF or TXT · max 120,000 characters</p>
+                <p className="font-mono-ui mt-5 text-[10px] uppercase tracking-[.16em] text-muted-foreground/70">PDF, DOCX, TXT or MD · Up to 100 MB</p>
               </div>
             </div>
             {uploadError && <div className="mt-3 flex items-center gap-2 text-sm text-destructive" role="alert" data-testid="status-upload-error"><AlertCircle size={15} /> {uploadError}</div>}
@@ -144,14 +159,24 @@ export default function Home() {
                 {document.warning && <p className="mt-3 text-xs leading-5 text-[hsl(35_65%_43%)]" data-testid="text-document-warning">{document.warning}</p>}
                 {!hasEnoughText && <p className="mt-4 flex gap-2 text-xs leading-5 text-muted-foreground"><AlertCircle size={14} className="mt-0.5 shrink-0 text-[hsl(35_65%_43%)]" /> Add a longer set of notes. Your tutor needs at least 80 characters to make useful questions.</p>}
                 <div className="mt-auto pt-6">
-                  <div className="mb-3 flex items-center justify-between">
-                    <label htmlFor="question-count" className="text-xs font-semibold">Questions</label>
-                    <select id="question-count" value={questionCount} onChange={(event) => setQuestionCount(Number(event.target.value))} className="rounded-lg border border-border bg-background px-2 py-1 text-xs font-bold outline-none focus:ring-2 focus:ring-ring" data-testid="select-question-count">
-                      {[3, 5, 7, 10].map((count) => <option key={count} value={count}>{count}</option>)}
-                    </select>
+                  <div className="mb-3">
+                    <label className="text-xs font-semibold text-foreground">Select question count</label>
+                    <div className="mt-2 grid grid-cols-4 gap-2">
+                      {[3, 5, 7, 10].map((count) => (
+                        <button
+                          key={count}
+                          type="button"
+                          onClick={() => setQuestionCount(count)}
+                          className={`rounded-xl border py-2 text-xs font-bold transition-all ${questionCount === count ? 'border-primary bg-primary text-primary-foreground shadow-sm' : 'border-border bg-background text-muted-foreground hover:border-primary/50 hover:text-foreground'}`}
+                          data-testid={`button-count-${count}`}
+                        >
+                          {count} Qs
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                  <button onClick={createQuiz} disabled={!hasEnoughText || isGenerating} className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3.5 text-sm font-bold text-primary-foreground transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0" data-testid="button-generate-quiz">
-                    {isGenerating ? <><Loader2 size={16} className="animate-spin" /> Building your quiz…</> : <><Sparkles size={16} /> Make my quiz <ArrowRight size={15} /></>}
+                  <button onClick={() => createQuiz()} disabled={!hasEnoughText || isGenerating} className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3.5 text-sm font-bold text-primary-foreground transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0" data-testid="button-generate-quiz">
+                    {isGenerating ? <><Loader2 size={16} className="animate-spin" /> Building your quiz…</> : <><Sparkles size={16} /> Make my quiz ({questionCount} questions) <ArrowRight size={15} /></>}
                   </button>
                   {generateQuiz.isError && <p className="mt-3 text-xs text-destructive" role="alert" data-testid="status-generate-error">{getErrorMessage(generateQuiz.error, 'Quiz generation failed. Try again.')}</p>}
                 </div>
@@ -168,7 +193,7 @@ export default function Home() {
 
         <section className="fade-up fade-up-delay-3 mt-12 grid gap-4 border-t border-border pt-7 sm:grid-cols-3">
           {[
-            { icon: FileText, label: '01 / Import', copy: 'Your PDF or TXT becomes a clean study source.' },
+            { icon: FileText, label: '01 / Import', copy: 'Your PDF, DOCX, or TXT becomes a clean study source.' },
             { icon: Sparkles, label: '02 / Distill', copy: 'The tutor spots concepts worth testing.' },
             { icon: RefreshCw, label: '03 / Recall', copy: 'Answer, reflect, and make it stick.' },
           ].map(({ icon: Icon, label, copy }) => (
@@ -179,6 +204,102 @@ export default function Home() {
           ))}
         </section>
       </div>
+
+      {showCountModal && document && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="relative w-full max-w-lg rounded-3xl border border-border bg-card p-6 shadow-2xl paper-shadow sm:p-8">
+            <button
+              onClick={() => setShowCountModal(false)}
+              className="absolute right-4 top-4 rounded-full p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
+              aria-label="Close"
+            >
+              ✕
+            </button>
+
+            <div className="flex items-center gap-3">
+              <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                <Sparkles size={22} />
+              </span>
+              <div>
+                <p className="font-mono-ui text-[10px] uppercase tracking-wider text-primary">Notes Uploaded Successfully</p>
+                <h3 className="text-lg font-bold truncate max-w-[320px]">{document.fileName}</h3>
+              </div>
+            </div>
+
+            <div className="mt-6">
+              <h4 className="text-base font-bold text-foreground">How many questions would you like for this quiz?</h4>
+              <p className="mt-1 text-xs text-muted-foreground">Choose a practice length that fits your study session.</p>
+
+              <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                {[
+                  { count: 3, label: 'Quick', desc: '1-2 mins' },
+                  { count: 5, label: 'Standard', desc: 'Recommended' },
+                  { count: 7, label: 'Deep Dive', desc: '5-7 mins' },
+                  { count: 10, label: 'Mastery', desc: 'Full exam' },
+                ].map((preset) => (
+                  <button
+                    key={preset.count}
+                    type="button"
+                    onClick={() => setQuestionCount(preset.count)}
+                    className={`flex flex-col items-center justify-center rounded-2xl border p-3.5 text-center transition-all ${
+                      questionCount === preset.count
+                        ? 'border-primary bg-primary/10 ring-2 ring-primary text-foreground font-bold shadow-sm'
+                        : 'border-border bg-card text-muted-foreground hover:border-primary/50 hover:bg-muted/50'
+                    }`}
+                  >
+                    <span className="text-2xl font-display">{preset.count}</span>
+                    <span className="mt-1 text-xs font-bold text-foreground">{preset.label}</span>
+                    <span className="text-[10px] text-muted-foreground">{preset.desc}</span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="mt-4 flex items-center gap-3 rounded-2xl bg-muted/40 p-3">
+                <label htmlFor="custom-count-input" className="text-xs font-semibold text-muted-foreground whitespace-nowrap">
+                  Or custom questions (1-30):
+                </label>
+                <input
+                  id="custom-count-input"
+                  type="number"
+                  min={1}
+                  max={30}
+                  value={questionCount}
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value, 10);
+                    if (!isNaN(val) && val >= 1 && val <= 30) {
+                      setQuestionCount(val);
+                    }
+                  }}
+                  className="w-20 rounded-xl border border-border bg-background px-3 py-1.5 text-center text-sm font-bold outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                />
+              </div>
+            </div>
+
+            <div className="mt-7 flex flex-col gap-2.5 sm:flex-row">
+              <button
+                type="button"
+                onClick={() => createQuiz(questionCount)}
+                disabled={isGenerating}
+                className="flex flex-1 items-center justify-center gap-2 rounded-2xl bg-primary px-5 py-3.5 text-sm font-bold text-primary-foreground transition-transform hover:-translate-y-0.5 disabled:opacity-50"
+              >
+                {isGenerating ? (
+                  <><Loader2 size={16} className="animate-spin" /> Building your quiz…</>
+                ) : (
+                  <><Sparkles size={16} /> Start {questionCount}-Question Quiz <ArrowRight size={15} /></>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowCountModal(false)}
+                disabled={isGenerating}
+                className="rounded-2xl border border-border px-4 py-3 text-xs font-bold text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                Configure later
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </AppShell>
   );
 }

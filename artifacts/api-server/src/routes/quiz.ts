@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import multer from "multer";
 import pdfParse from "pdf-parse";
+import mammoth from "mammoth";
 import {
   ExtractDocumentResponse,
   GenerateQuizBody,
@@ -8,7 +9,7 @@ import {
 } from "@workspace/api-zod";
 
 const router: IRouter = Router();
-const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
+const MAX_UPLOAD_BYTES = 100 * 1024 * 1024; // 100 MB
 const SAFE_CHUNK_SIZE = 12_000;
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -53,14 +54,26 @@ function getExtension(fileName: string) {
 
 async function extractText(file: Express.Multer.File) {
   const extension = getExtension(file.originalname);
-  if (extension === "txt") {
+  if (["txt", "md", "markdown", "csv", "json", "rtf", "log"].includes(extension)) {
     return file.buffer.toString("utf8");
+  }
+  if (extension === "docx" || extension === "doc") {
+    try {
+      const result = await mammoth.extractRawText({ buffer: file.buffer });
+      if (result.value && result.value.trim().length > 0) {
+        return result.value;
+      }
+    } catch {
+      // Fallback text extraction if docx parsing encounters issues
+      const rawText = file.buffer.toString("utf8").replace(/[^\x20-\x7E\n\r\t]/g, " ");
+      if (rawText.trim().length > 80) return rawText;
+    }
   }
   if (extension === "pdf") {
     const parsed = await pdfParse(file.buffer);
     return parsed.text ?? "";
   }
-  throw new Error("Only PDF and TXT files are supported.");
+  throw new Error("Only PDF, DOCX, DOC, TXT, and MD files are supported.");
 }
 
 function parseJsonResponse(content: string): unknown {
@@ -69,27 +82,80 @@ function parseJsonResponse(content: string): unknown {
   return JSON.parse(candidate.trim());
 }
 
+function shuffleArray<T>(array: T[]): T[] {
+  const arr = [...array];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
 function demoQuestions(text: string, questionCount: number): QuizQuestion[] {
-  const firstSentence =
-    text.match(/[^.!?]+[.!?]/)?.[0]?.trim() ??
-    "This document contains a set of important ideas to review.";
-  const topic = firstSentence.replace(/[.!?]+$/, "").slice(0, 96);
-  return Array.from({ length: questionCount }, (_, index) => ({
-    id: `demo-${index + 1}`,
-    question:
-      index === 0
-        ? `Which statement best reflects the opening idea of the document?`
-        : `What is the most useful study action for reviewing this material?`,
-    options:
-      index === 0
-        ? [firstSentence, "The document has no central idea.", "The topic is unrelated to study.", "Only the formatting matters."]
-        : ["Connect the ideas to examples.", "Skip the explanations.", "Memorize the file name.", "Review without reading."],
-    correctAnswerIndex: 0,
-    explanation:
-      index === 0
-        ? `The document begins with the idea that ${topic.toLowerCase()}.`
-        : "Connecting ideas to examples improves recall and shows whether the concept is understood.",
-  }));
+  const rawSentences = text
+    .split(/(?<=[.!?\n])\s+/)
+    .map((s) => s.replace(/[\r\n\t]+/g, " ").trim())
+    .filter((s) => s.length >= 25 && s.length <= 220 && !s.startsWith("http"));
+
+  const defaultPool = [
+    "Active recall strengthens neural pathways and significantly improves long-term memory retention.",
+    "Spaced repetition schedules reviews at optimal intervals right before forgetting typically occurs.",
+    "Interleaving different related topics develops problem-solving flexibility and adaptive thinking.",
+    "Self-testing exposes knowledge gaps far more effectively than passive re-reading of notes.",
+    "Elaborative rehearsal systematically connects new concepts to existing foundational knowledge.",
+    "Summarizing key concepts in your own words boosts conceptual comprehension and rapid retrieval.",
+    "Breaking down complex documents into modular chunks makes studying and review manageable.",
+    "Testing yourself immediately after reading improves consolidation of core factual details.",
+    "Reviewing mistakes with clear explanations prevents reinforcement of incorrect mental models.",
+    "Consistent daily practice sessions consistently outperform sporadic marathon cramming sessions.",
+    "Dual coding combines visual diagrams with verbal explanations for enhanced cognitive retention.",
+    "Retrieval practice forces the brain to reconstruct memory traces, solidifying neural pathways."
+  ];
+
+  const pool = rawSentences.length >= questionCount ? shuffleArray(rawSentences) : shuffleArray([...rawSentences, ...defaultPool]);
+
+  const questionTemplates = [
+    (snip: string) => `According to your study material, which statement accurately reflects the point regarding "${snip}..."?`,
+    (snip: string) => `What key takeaway is emphasized in the section discussing "${snip}..."?`,
+    (snip: string) => `Based on the provided notes, which of the following is correct regarding "${snip}..."?`,
+    (snip: string) => `Which core insight is highlighted in the text concerning "${snip}..."?`,
+    (snip: string) => `From the uploaded document, what can be concluded about "${snip}..."?`,
+  ];
+
+  return Array.from({ length: questionCount }, (_, index) => {
+    const targetSentence = pool[index % pool.length];
+    const words = targetSentence.split(" ");
+    const snippetLength = Math.min(7, Math.max(3, words.length));
+    const snippet = words.slice(0, snippetLength).join(" ").replace(/[.,;:]+$/, "");
+
+    // Pick 3 distractors from other sentences in the pool
+    const otherSentences = pool.filter((s) => s !== targetSentence);
+    const shuffledOthers = shuffleArray(otherSentences);
+    
+    let distractors: string[] = [];
+    if (shuffledOthers.length >= 3) {
+      distractors = shuffledOthers.slice(0, 3);
+    } else {
+      distractors = [
+        `The material indicates that ${snippet.toLowerCase()} is completely irrelevant to the main topic.`,
+        `The author suggests the inverse is true regarding ${snippet.toLowerCase()}.`,
+        `This concept applies only as an unverified exception in isolated scenarios.`,
+      ];
+    }
+
+    const templateFn = questionTemplates[index % questionTemplates.length];
+    const rawOptions = [targetSentence, ...distractors.slice(0, 3)];
+    const options = shuffleArray(rawOptions);
+    const correctAnswerIndex = options.indexOf(targetSentence);
+
+    return {
+      id: `q-${index + 1}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      question: templateFn(snippet),
+      options,
+      correctAnswerIndex: correctAnswerIndex >= 0 ? correctAnswerIndex : 0,
+      explanation: `From the source material: "${targetSentence}"`,
+    };
+  });
 }
 
 async function callOpenAI(messages: Array<{ role: "system" | "user"; content: string }>, maxTokens: number) {
@@ -104,7 +170,7 @@ async function callOpenAI(messages: Array<{ role: "system" | "user"; content: st
     body: JSON.stringify({
       model: "gpt-4o-mini",
       messages,
-      temperature: 0.2,
+      temperature: 0.6,
       max_tokens: maxTokens,
       response_format: { type: "json_object" },
     }),
@@ -125,8 +191,13 @@ async function buildQuiz(text: string, fileName: string | undefined, questionCou
   const chunks = splitIntoLogicalChunks(text);
   const chunkSummaries: string[] = [];
 
-  if (chunks.length > 1) {
-    for (const [index, chunk] of chunks.entries()) {
+  // Limit chunk summarizing to max 6 representative sections to keep response instant
+  const selectedChunks = chunks.length > 6
+    ? Array.from({ length: 6 }, (_, i) => chunks[Math.floor((i * (chunks.length - 1)) / 5)])
+    : chunks;
+
+  if (selectedChunks.length > 1) {
+    for (const [index, chunk] of selectedChunks.entries()) {
       const summary = await callOpenAI(
         [
           {
@@ -136,7 +207,7 @@ async function buildQuiz(text: string, fileName: string | undefined, questionCou
           },
           {
             role: "user",
-            content: `Document section ${index + 1} of ${chunks.length}:\n\n${chunk}`,
+            content: `Document section ${index + 1} of ${selectedChunks.length}:\n\n${chunk}`,
           },
         ],
         900,
@@ -196,11 +267,16 @@ ${sourceForQuiz}`;
           ) {
             return null;
           }
+          const rawOptions = item.options.map(String);
+          const rawCorrectIndex = Math.max(0, Math.min(3, Math.round(item.correctAnswerIndex)));
+          const correctAnswerText = rawOptions[rawCorrectIndex];
+          const shuffledOptions = shuffleArray(rawOptions);
+          const newCorrectIndex = shuffledOptions.indexOf(correctAnswerText);
           return {
-            id: typeof item.id === "string" ? item.id : `q${index + 1}`,
+            id: typeof item.id === "string" ? `${item.id}-${Math.random().toString(36).slice(2, 6)}` : `q${index + 1}-${Date.now().toString(36)}`,
             question: item.question,
-            options: item.options.map(String),
-            correctAnswerIndex: Math.max(0, Math.min(3, Math.round(item.correctAnswerIndex))),
+            options: shuffledOptions,
+            correctAnswerIndex: newCorrectIndex >= 0 ? newCorrectIndex : 0,
             explanation: item.explanation,
           };
         })
@@ -221,7 +297,7 @@ router.post(
   (req, res, next) => {
     upload.single("file")(req, res, (error) => {
       if (error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE") {
-        res.status(413).json({ error: "That file is too large. Keep uploads under 15 MB.", code: "FILE_TOO_LARGE" });
+        res.status(413).json({ error: "That file is too large. Keep uploads under 100 MB.", code: "FILE_TOO_LARGE" });
         return;
       }
       if (error) {
@@ -234,12 +310,13 @@ router.post(
   async (req, res) => {
   try {
     if (!req.file) {
-      res.status(400).json({ error: "Choose a PDF or TXT file to continue.", code: "FILE_REQUIRED" });
+      res.status(400).json({ error: "Choose a PDF, DOCX, TXT, or MD file to continue.", code: "FILE_REQUIRED" });
       return;
     }
     const extension = getExtension(req.file.originalname);
-    if (!["pdf", "txt"].includes(extension)) {
-      res.status(400).json({ error: "Only PDF and TXT files are supported.", code: "UNSUPPORTED_FILE_TYPE" });
+    const supported = ["pdf", "txt", "docx", "doc", "md", "markdown", "csv", "json", "rtf", "log"];
+    if (!supported.includes(extension)) {
+      res.status(400).json({ error: "Only PDF, DOCX, DOC, TXT, and MD files are supported.", code: "UNSUPPORTED_FILE_TYPE" });
       return;
     }
     const text = (await extractText(req.file)).trim();
@@ -247,6 +324,8 @@ router.post(
     const warning =
       extension === "pdf" && text.length < 80
         ? "This PDF may be scanned or image-based. No meaningful text was found."
+        : text.length < 80
+        ? "Very little text was extracted from this file."
         : null;
     const response = ExtractDocumentResponse.parse({
       fileName: req.file.originalname,
