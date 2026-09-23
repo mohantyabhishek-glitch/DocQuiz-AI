@@ -11,13 +11,16 @@ interface AuthContextType {
   isLoading: boolean;
   login: (email: string, password: string) => Promise<AuthUser>;
   register: (name: string, email: string, phone: string, password: string) => Promise<AuthUser>;
-  sendPhoneOtp: (countryCode: string, phoneNumber: string) => Promise<{ message: string; phone: string; expiresInSeconds: number; debugOtp?: string }>;
+  sendPhoneOtp: (countryCode: string, phoneNumber: string) => Promise<{ message: string; phone: string; expiresInSeconds: number }>;
   verifyPhoneOtp: (countryCode: string, phoneNumber: string, otp: string) => Promise<AuthUser>;
+  sendGoogleEmailOtp: (email: string, name?: string) => Promise<{ message: string; email: string; expiresInSeconds: number }>;
+  verifyGoogleEmailOtp: (email: string, otp: string, name?: string) => Promise<AuthUser>;
   loginWithGoogle: (params: { email: string; name?: string; avatarUrl?: string }) => Promise<AuthUser>;
   demoLogin: () => Promise<AuthUser>;
   forgotPassword: (email: string) => Promise<{ message: string; email: string }>;
   logout: () => Promise<void>;
 }
+
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -79,11 +82,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return newUser;
   };
 
+  const sendGoogleEmailOtp = async (email: string, name?: string) => {
+    return await authService.sendGoogleEmailOtp(email, name);
+  };
+
+  const verifyGoogleEmailOtp = async (email: string, otp: string, name?: string) => {
+    const { token: newToken, user: newUser } = await authService.verifyGoogleEmailOtp(email, otp, name);
+    saveSession(newToken, newUser);
+    return newUser;
+  };
+
   const loginWithGoogle = async (params: { email: string; name?: string; avatarUrl?: string }) => {
     const { token: newToken, user: newUser } = await authService.googleAuth(params);
     saveSession(newToken, newUser);
     return newUser;
   };
+
 
 
   const demoLogin = async () => {
@@ -110,12 +124,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         register,
         sendPhoneOtp,
         verifyPhoneOtp,
+        sendGoogleEmailOtp,
+        verifyGoogleEmailOtp,
         loginWithGoogle,
         demoLogin,
         forgotPassword,
         logout,
       }}
     >
+
       {children}
     </AuthContext.Provider>
   );

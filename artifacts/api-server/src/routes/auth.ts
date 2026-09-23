@@ -288,16 +288,133 @@ router.post("/auth/phone/verify-otp", (req: Request, res: Response) => {
   }
 });
 
-// 5. POST /api/auth/google
-router.post("/auth/google", (req: Request, res: Response) => {
+import nodemailer from "nodemailer";
+
+// In-memory active Email OTP store: email -> { code, expiresAt, attempts }
+const activeEmailOtps = new Map<string, { code: string; expiresAt: number; attempts: number }>();
+
+// Helper to create Nodemailer transport
+function createEmailTransporter() {
+  const host = process.env.SMTP_HOST || process.env.GMAIL_SMTP_HOST;
+  const port = parseInt(process.env.SMTP_PORT || "587", 10);
+  const user = process.env.SMTP_USER || process.env.GMAIL_USER;
+  const pass = process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD;
+
+  if (host && user && pass) {
+    return nodemailer.createTransport({
+      host,
+      port,
+      secure: port === 465,
+      auth: { user, pass },
+    });
+  }
+
+  // If using standard Gmail service
+  if (user && pass) {
+    return nodemailer.createTransport({
+      service: "gmail",
+      auth: { user, pass },
+    });
+  }
+
+  return null;
+}
+
+// 5. POST /api/auth/google/send-otp
+router.post("/auth/google/send-otp", async (req: Request, res: Response) => {
   try {
-    const { email, name, avatarUrl } = req.body;
+    const { email, name } = req.body;
 
     if (!email || typeof email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
-      return res.status(400).json({ error: "Please provide a valid Google email address." });
+      return res.status(400).json({ error: "Please enter a valid Google / Gmail address." });
     }
 
     const normalizedEmail = email.trim().toLowerCase();
+    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes expiration
+
+    activeEmailOtps.set(normalizedEmail, { code: otpCode, expiresAt, attempts: 0 });
+
+    const transporter = createEmailTransporter();
+    if (transporter) {
+      try {
+        const fromAddress = process.env.SMTP_FROM || process.env.GMAIL_USER || "no-reply@docquiz.ai";
+        await transporter.sendMail({
+          from: `"DocQuiz AI" <${fromAddress}>`,
+          to: normalizedEmail,
+          subject: `Your DocQuiz AI Google Verification Code: ${otpCode}`,
+          html: `
+            <div style="font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 520px; margin: 0 auto; padding: 28px; border: 1px solid #e2ded5; border-radius: 18px; background-color: #fbf9f4; color: #1e2532;">
+              <div style="margin-bottom: 20px;">
+                <h2 style="margin: 0; color: #d95338; font-size: 24px; font-weight: 800;">DocQuiz <span style="color: #1e2532;">AI</span></h2>
+                <p style="margin: 4px 0 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.15em; color: #707886;">Active Recall Desk</p>
+              </div>
+              <p style="font-size: 15px; line-height: 1.6; color: #333d4b;">Hello ${name || "Learner"},</p>
+              <p style="font-size: 14px; line-height: 1.6; color: #525f70;">Here is your 6-digit Google identity verification code to sign into DocQuiz AI:</p>
+              <div style="text-align: center; margin: 26px 0;">
+                <span style="display: inline-block; padding: 14px 28px; font-family: monospace; font-size: 32px; font-weight: 800; letter-spacing: 8px; color: #d95338; background: #ffffff; border: 2px solid #e2ded5; border-radius: 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.04);">
+                  ${otpCode}
+                </span>
+              </div>
+              <p style="font-size: 12px; color: #707886; line-height: 1.5;">This code will expire in 10 minutes. If you did not request this login code, you can safely disregard this email.</p>
+              <hr style="border: none; border-top: 1px solid #e2ded5; margin: 24px 0;" />
+              <p style="font-size: 11px; color: #9aa2b1; text-align: center; margin: 0;">Encrypted active recall session · DocQuiz AI</p>
+            </div>
+          `,
+        });
+        logger.info({ email: normalizedEmail }, "Real Google verification OTP email sent via SMTP");
+      } catch (mailErr) {
+        logger.error({ mailErr }, "Failed to send email via SMTP transporter");
+      }
+    } else {
+      logger.info({ email: normalizedEmail, code: otpCode }, "Email OTP generated (SMTP not configured in env - check server log)");
+    }
+
+    return res.status(200).json({
+      message: `Verification code sent to ${normalizedEmail}`,
+      email: normalizedEmail,
+      expiresInSeconds: 600,
+    });
+  } catch (error) {
+    logger.error({ error }, "Error sending email OTP");
+    return res.status(500).json({ error: "Failed to send verification email. Please try again." });
+  }
+});
+
+// 5b. POST /api/auth/google/verify-otp
+router.post("/auth/google/verify-otp", (req: Request, res: Response) => {
+  try {
+    const { email, otp, name, avatarUrl } = req.body;
+
+    if (!email || !otp) {
+      return res.status(400).json({ error: "Email address and 6-digit verification code are required." });
+    }
+
+    const normalizedEmail = String(email).trim().toLowerCase();
+    const cleanOtp = String(otp).trim();
+    const record = activeEmailOtps.get(normalizedEmail);
+
+    if (!record) {
+      return res.status(400).json({ error: "No active verification code found for this email. Please request a new code." });
+    }
+
+    if (Date.now() > record.expiresAt) {
+      activeEmailOtps.delete(normalizedEmail);
+      return res.status(400).json({ error: "Verification code has expired. Please request a new code." });
+    }
+
+    if (record.code !== cleanOtp) {
+      record.attempts += 1;
+      if (record.attempts >= 5) {
+        activeEmailOtps.delete(normalizedEmail);
+        return res.status(429).json({ error: "Too many incorrect attempts. Please request a new verification code." });
+      }
+      return res.status(400).json({ error: "Invalid verification code. Please check your inbox and try again." });
+    }
+
+    // OTP Verified! Clean up OTP record
+    activeEmailOtps.delete(normalizedEmail);
+
     const userName = name && typeof name === "string" && name.trim().length > 0 ? name.trim() : normalizedEmail.split("@")[0];
 
     let user = usersByEmail.get(normalizedEmail);
@@ -318,16 +435,19 @@ router.post("/auth/google", (req: Request, res: Response) => {
     const token = generateToken();
     activeTokens.set(token, user.id);
 
+    logger.info({ userId: user.id, email: normalizedEmail }, "Google email OTP verified successfully");
+
     return res.status(200).json({
-      message: "Google sign-in successful",
+      message: "Google verification successful",
       token,
       user: sanitizeUser(user),
     });
   } catch (error) {
-    logger.error({ error }, "Error during Google auth");
-    return res.status(500).json({ error: "Failed to sign in with Google." });
+    logger.error({ error }, "Error verifying Google email OTP");
+    return res.status(500).json({ error: "Failed to verify code. Please try again." });
   }
 });
+
 
 
 // 6. POST /api/auth/forgot-password

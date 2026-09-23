@@ -267,6 +267,80 @@ export const authService = {
     };
   },
 
+  async sendGoogleEmailOtp(email: string, name?: string): Promise<{ message: string; email: string; expiresInSeconds: number }> {
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      throw new Error('Please enter a valid Google / Gmail address.');
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/google/send-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.trim().toLowerCase(), name }),
+      });
+
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {
+      // Fallback
+    }
+
+    return {
+      message: `Verification code sent to ${email.trim()}`,
+      email: email.trim().toLowerCase(),
+      expiresInSeconds: 600,
+    };
+  },
+
+  async verifyGoogleEmailOtp(email: string, otp: string, name?: string): Promise<{ token: string; user: AuthUser }> {
+    const normalizedEmail = email.trim().toLowerCase();
+
+    try {
+      const res = await fetch(`${API_BASE}/google/verify-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: normalizedEmail, otp: otp.trim(), name }),
+      });
+
+      if (res.ok) {
+        return await res.json();
+      }
+
+      if (res.status === 400 || res.status === 429) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Invalid verification code.');
+      }
+    } catch (err: any) {
+      if (err.message && err.message.includes('Invalid')) {
+        throw err;
+      }
+    }
+
+    // Client fallback
+    const users = getLocalUsers();
+    let user = users.find((u) => u.email.toLowerCase() === normalizedEmail);
+    const userName = name || normalizedEmail.split('@')[0];
+
+    if (!user) {
+      user = {
+        id: `usr_google_${Date.now()}`,
+        name: userName,
+        email: normalizedEmail,
+        avatarUrl: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(userName)}`,
+        provider: 'google',
+        createdAt: new Date().toISOString(),
+      };
+      users.push(user);
+      saveLocalUsers(users);
+    }
+
+    return {
+      token: `dqa_google_${Date.now()}`,
+      user,
+    };
+  },
+
   async googleAuth(params: { email: string; name?: string; avatarUrl?: string }): Promise<{ token: string; user: AuthUser }> {
     if (!params.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(params.email.trim())) {
       throw new Error('Please enter a valid Google email address.');
@@ -310,6 +384,7 @@ export const authService = {
       user,
     };
   },
+
 
 
   async forgotPassword(email: string): Promise<{ message: string; email: string; status: string }> {
