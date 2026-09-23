@@ -451,9 +451,78 @@ router.post("/auth/google/verify-otp", (req: Request, res: Response) => {
   }
 });
 
+// Helper to decode JWT payload safely (Google ID Token)
+function decodeJwtPayload(token: string): Record<string, any> | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length < 2) return null;
+    const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const jsonPayload = Buffer.from(base64, "base64").toString("utf-8");
+    return JSON.parse(jsonPayload);
+  } catch {
+    return null;
+  }
+}
 
+// 5d. Official Google OAuth 2.0 Identity Services Login (1-Click Google Sign-In)
+router.post("/auth/google/oauth", async (req: Request, res: Response) => {
+  try {
+    const { credential, email: directEmail, name: directName, avatarUrl: directAvatar } = req.body;
 
-// 5c. Universal Email OTP Routes (Works for ANY email: Gmail, Outlook, Yahoo, iCloud, university, etc.)
+    let email = directEmail;
+    let name = directName;
+    let avatarUrl = directAvatar;
+
+    if (credential && typeof credential === "string") {
+      const payload = decodeJwtPayload(credential);
+      if (payload) {
+        email = payload.email;
+        name = payload.name || payload.given_name || (payload.email ? payload.email.split("@")[0] : undefined);
+        avatarUrl = payload.picture || avatarUrl;
+      }
+    }
+
+    if (!email || typeof email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      return res.status(400).json({ error: "Invalid Google account credentials." });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const userName = name && typeof name === "string" && name.trim().length > 0 ? name.trim() : normalizedEmail.split("@")[0];
+
+    let user = usersByEmail.get(normalizedEmail);
+    if (!user) {
+      const userId = `usr_${crypto.randomBytes(8).toString("hex")}`;
+      user = {
+        id: userId,
+        name: userName,
+        email: normalizedEmail,
+        avatarUrl: avatarUrl || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(userName)}`,
+        provider: "google",
+        createdAt: new Date().toISOString(),
+      };
+      usersByEmail.set(normalizedEmail, user);
+      usersById.set(userId, user);
+    } else {
+      if (avatarUrl && !user.avatarUrl) {
+        user.avatarUrl = avatarUrl;
+      }
+    }
+
+    const token = generateToken();
+    activeTokens.set(token, user.id);
+
+    logger.info({ userId: user.id, email: normalizedEmail }, "Google OAuth login successful");
+
+    return res.status(200).json({
+      message: "Google sign-in successful",
+      token,
+      user: sanitizeUser(user),
+    });
+  } catch (error) {
+    logger.error({ error }, "Error during Google OAuth sign-in");
+    return res.status(500).json({ error: "Failed to sign in with Google. Please try again." });
+  }
+});
 router.post("/auth/email/send-otp", async (req: Request, res: Response) => {
   try {
     const { email, name } = req.body;

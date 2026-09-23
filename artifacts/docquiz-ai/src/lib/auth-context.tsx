@@ -15,6 +15,7 @@ interface AuthContextType {
   verifyPhoneOtp: (countryCode: string, phoneNumber: string, otp: string) => Promise<AuthUser>;
   sendGoogleEmailOtp: (email: string, name?: string) => Promise<{ message: string; email: string; expiresInSeconds: number }>;
   verifyGoogleEmailOtp: (email: string, otp: string, name?: string) => Promise<AuthUser>;
+  loginWithGoogleOAuth: (params: { credential?: string; email?: string; name?: string; avatarUrl?: string }) => Promise<AuthUser>;
   loginWithGoogle: (params: { email: string; name?: string; avatarUrl?: string }) => Promise<AuthUser>;
   demoLogin: () => Promise<AuthUser>;
   forgotPassword: (email: string) => Promise<{ message: string; email: string }>;
@@ -98,7 +99,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return newUser;
   };
 
-
+  const loginWithGoogleOAuth = async (params: { credential?: string; email?: string; name?: string; avatarUrl?: string }) => {
+    const { token: newToken, user: newUser } = await authService.googleOAuth(params);
+    saveSession(newToken, newUser);
+    return newUser;
+  };
 
   const demoLogin = async () => {
     return login('alex.morgan@docquiz.ai', 'DocQuiz2026!');
@@ -126,13 +131,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         verifyPhoneOtp,
         sendGoogleEmailOtp,
         verifyGoogleEmailOtp,
+        loginWithGoogleOAuth,
         loginWithGoogle,
         demoLogin,
         forgotPassword,
         logout,
       }}
     >
-
       {children}
     </AuthContext.Provider>
   );
