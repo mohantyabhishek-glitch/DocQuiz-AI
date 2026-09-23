@@ -3,13 +3,15 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: API for extracting study documents and generating interactive quizzes.
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: quiz
+    description: Document processing and quiz generation
 paths:
   /healthz:
     get:
@@ -24,6 +26,68 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /documents/extract:
+    post:
+      operationId: extractDocument
+      tags: [quiz]
+      summary: Extract text from a study document
+      description: Accepts a PDF or TXT upload and safely extracts its text.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/DocumentUpload"
+      responses:
+        "200":
+          description: Extracted document metadata and text
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExtractedDocument"
+        "400":
+          description: Invalid upload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "413":
+          description: Upload too large
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /generate-quiz:
+    post:
+      operationId: generateQuiz
+      tags: [quiz]
+      summary: Generate an interactive quiz
+      description: Creates bounded multiple-choice questions from extracted study text.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QuizGenerationInput"
+      responses:
+        "200":
+          description: Generated quiz
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Quiz"
+        "400":
+          description: Invalid generation request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: Quiz generation provider failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 components:
   schemas:
     HealthStatus:
@@ -31,6 +95,87 @@ components:
       properties:
         status:
           type: string
-      required:
-        - status
-
+      required: [status]
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+      required: [error]
+    DocumentUpload:
+      type: object
+      properties:
+        file:
+          type: string
+          format: binary
+      required: [file]
+    ExtractedDocument:
+      type: object
+      properties:
+        fileName:
+          type: string
+        fileType:
+          type: string
+        characterCount:
+          type: integer
+        wordCount:
+          type: integer
+        chunkCount:
+          type: integer
+        text:
+          type: string
+        warning:
+          type: ["string", "null"]
+      required: [fileName, fileType, characterCount, wordCount, chunkCount, text, warning]
+    QuizGenerationInput:
+      type: object
+      properties:
+        text:
+          type: string
+          minLength: 80
+          maxLength: 120000
+        fileName:
+          type: string
+        questionCount:
+          type: integer
+          minimum: 3
+          maximum: 10
+      required: [text, questionCount]
+    QuizQuestion:
+      type: object
+      properties:
+        id:
+          type: string
+        question:
+          type: string
+        options:
+          type: array
+          minItems: 4
+          maxItems: 4
+          items:
+            type: string
+        correctAnswerIndex:
+          type: integer
+          minimum: 0
+          maximum: 3
+        explanation:
+          type: string
+      required: [id, question, options, correctAnswerIndex, explanation]
+    Quiz:
+      type: object
+      properties:
+        title:
+          type: string
+        sourceFileName:
+          type: string
+        questions:
+          type: array
+          items:
+            $ref: "#/components/schemas/QuizQuestion"
+        generatedWith:
+          type: string
+        isDemo:
+          type: boolean
+      required: [title, sourceFileName, questions, generatedWith, isDemo]

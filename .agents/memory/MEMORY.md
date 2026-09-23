@@ -1,0 +1,1 @@
+- [AI provider fallback](ai-provider-fallback.md) — keep quiz generation bounded and visibly fall back locally when provider access is unavailable.

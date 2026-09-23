@@ -1,6 +1,6 @@
-# [Project name]
+# DocQuiz AI
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+DocQuiz AI turns uploaded PDF and TXT study notes into interactive multiple-choice quizzes with instant feedback and explanations.
 
 ## Run & Operate
 
@@ -22,23 +22,35 @@ _Replace the heading above with the project's name, and this line with one sente
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/docquiz-ai/` — React/Vite web app, upload flow, quiz session, and local session storage
+- `artifacts/api-server/src/routes/quiz.ts` — document extraction, bounded chunking, provider generation, and fallback behavior
+- `lib/api-spec/openapi.yaml` — source of truth for extraction and quiz-generation contracts
+- `artifacts/docquiz-ai/src/index.css` — DocQuiz visual tokens and responsive layout utilities
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- PDF/TXT bytes are processed in memory and are not persisted; the browser keeps the current extracted document and quiz in local session storage.
+- Text over 12,000 characters is split on logical boundaries; multi-section documents are summarized section-by-section before quiz generation.
+- OpenAI generation uses bounded JSON-only chat completions with low temperature and explicit output limits.
+- If an AI provider is unavailable, the API returns a clearly marked local fallback quiz rather than blocking the study flow.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+- Drag-and-drop or file-picker upload for PDF and TXT notes
+- Safe extraction metrics, scanned-PDF warning, and document readiness state
+- Configurable 3/5/7/10-question quiz generation
+- One-question-at-a-time recall practice with immediate answer feedback
+- Final score recap and restart flow
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+None recorded.
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- The API server is mounted at `/api`; frontend API calls should use the generated client hooks rather than hardcoded service ports.
+- The frontend workflow supplies `PORT` and `BASE_PATH`; run the managed workflow for preview rather than starting Vite without those variables.
+- The AI provider key is read from `OPENAI_API_KEY`; provider errors are intentionally sanitized before returning to the browser.
 
 ## Pointers
 
