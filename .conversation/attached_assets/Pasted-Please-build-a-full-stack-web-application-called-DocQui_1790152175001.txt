@@ -1,0 +1,33 @@
+Please build a full-stack web application called "DocQuiz AI" that allows users to upload study documents (PDFs, TXT files) and automatically generates interactive multiple-choice or short-answer questions based on the content.
+
+### 1. Tech Stack & Architecture
+- **Frontend**: React + Vite with Tailwind CSS for a clean, modern, academic UI.
+- **Backend**: Node.js & Express with multipart file handling (`multer`) and text extraction (`pdf-parse`).
+- **AI Integration**: Integration with an LLM API (Google Gemini API or OpenAI API) to parse document text and generate structured questions.
+
+### 2. Core Functional Requirements
+
+#### A. Document Upload & Text Extraction
+- **Dropzone UI**: A clean drag-and-drop zone supporting `.pdf` and `.txt` files.
+- **Parsing**: The backend must safely extract text from the uploaded file.
+
+#### B. Token-Safe Text Chunking & Summarization (Crucial)
+- To prevent running out of tokens or hitting context limits with large documents, the backend **must** implement a text-chunking mechanism:
+  - If extracted text exceeds safe token thresholds (e.g., > 12,000 characters), split the text into logical chunks.
+  - Process chunks iteratively or generate a concise summary/key-point extraction *first*, then pass the synthesized text to the question generator.
+  - Set explicit `maxOutputTokens` and temperature parameters on the LLM API call to ensure responses remain bounded, fast, and cost-effective.
+
+#### C. Question Generation Engine
+- An API endpoint (`POST /api/generate-quiz`) that accepts the processed text, prompts the LLM with a strict JSON-output system instruction, and returns:
+  - Question text
+  - 4 multiple-choice options
+  - The correct answer index
+  - A brief explanation for the correct answer
+
+#### D. Interactive Quiz Interface
+- Once questions are generated, transition the user to an interactive quiz view where they can answer questions one by one or all at once, view instant feedback, and see a final score recap.
+
+### 3. Error Handling & Polish
+- Graceful fallbacks if a PDF is scanned or image-based (with a clear user notification).
+- Clear loading spinners during file parsing and AI generation.
+-

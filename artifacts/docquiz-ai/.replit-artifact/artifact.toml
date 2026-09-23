@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "DocQuiz AI"
+description = "A focused study tool that turns PDF and TXT documents into interactive quizzes with explanations, progress tracking, and instant feedback."
+version = "1.0.0"
+id = "artifacts/docquiz-ai"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 24620
+
+[services.development]
+run = "pnpm --filter @workspace/docquiz-ai run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/docquiz-ai", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/docquiz-ai/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "24620"
+BASE_PATH = "/"
