@@ -1,11 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ChangeEvent, DragEvent } from 'react';
-import { AlertCircle, ArrowRight, Check, FilePlus2, FileText, Loader2, RefreshCw, ShieldCheck, Sparkles, UploadCloud } from 'lucide-react';
+import { AlertCircle, ArrowRight, Check, FilePlus2, FileText, Loader2, RefreshCw, ShieldCheck, Sparkles, Timer, UploadCloud } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { useExtractDocument, useGenerateQuiz } from '@workspace/api-client-react';
 import type { ExtractedDocument } from '@workspace/api-client-react';
 import { AppShell, FileTypeIcon } from '@/components/app-shell';
-import { readDocument, writeDocument, writeQuiz } from '@/lib/storage';
+import {
+  readDifficulty,
+  readDocument,
+  writeDifficulty,
+  writeDocument,
+  writeQuiz,
+  type QuizDifficulty,
+} from '@/lib/storage';
 
 function formatNumber(value: number): string {
   return new Intl.NumberFormat('en-US').format(value);
@@ -16,13 +23,20 @@ function getErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
+const DIFFICULTY_OPTIONS: { id: QuizDifficulty; label: string; icon: string; desc: string }[] = [
+  { id: 'blitz', label: 'Blitz', icon: '⚡', desc: '15s speed recall' },
+  { id: 'challenge', label: 'Challenge', icon: '🔥', desc: '30s standard' },
+  { id: 'relaxed', label: 'Relaxed', icon: '💡', desc: '60s deep think' },
+  { id: 'untimed', label: 'Untimed', icon: '🧘', desc: 'No time limit' },
+];
+
 export default function Home() {
   const [, setLocation] = useLocation();
   const inputRef = useRef<HTMLInputElement>(null);
   const [document, setDocument] = useState<ExtractedDocument | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [questionCount, setQuestionCount] = useState(5);
-  const [customCount, setCustomCount] = useState('');
+  const [difficulty, setDifficulty] = useState<QuizDifficulty>('challenge');
   const [showCountModal, setShowCountModal] = useState(false);
   const [uploadError, setUploadError] = useState('');
   const extractDocument = useExtractDocument();
@@ -30,6 +44,7 @@ export default function Home() {
 
   useEffect(() => {
     setDocument(readDocument());
+    setDifficulty(readDifficulty());
   }, []);
 
   const upload = (file?: File) => {
@@ -66,9 +81,15 @@ export default function Home() {
     upload(event.dataTransfer.files[0]);
   };
 
+  const selectDifficulty = (diff: QuizDifficulty) => {
+    setDifficulty(diff);
+    writeDifficulty(diff);
+  };
+
   const createQuiz = (countOverride?: number) => {
     const finalCount = countOverride ?? questionCount;
     if (!document || document.text.trim().length < 80) return;
+    writeDifficulty(difficulty);
     generateQuiz.mutate({
       data: { text: document.text, fileName: document.fileName, questionCount: finalCount },
     }, {
@@ -158,10 +179,10 @@ export default function Home() {
                 </div>
                 {document.warning && <p className="mt-3 text-xs leading-5 text-[hsl(35_65%_43%)]" data-testid="text-document-warning">{document.warning}</p>}
                 {!hasEnoughText && <p className="mt-4 flex gap-2 text-xs leading-5 text-muted-foreground"><AlertCircle size={14} className="mt-0.5 shrink-0 text-[hsl(35_65%_43%)]" /> Add a longer set of notes. Your tutor needs at least 80 characters to make useful questions.</p>}
-                <div className="mt-auto pt-6">
-                  <div className="mb-3">
-                    <label className="text-xs font-semibold text-foreground">Select question count</label>
-                    <div className="mt-2 grid grid-cols-4 gap-2">
+                <div className="mt-auto pt-6 space-y-3">
+                  <div>
+                    <label className="text-xs font-semibold text-foreground">Questions count</label>
+                    <div className="mt-1.5 grid grid-cols-4 gap-2">
                       {[3, 5, 7, 10].map((count) => (
                         <button
                           key={count}
@@ -175,8 +196,33 @@ export default function Home() {
                       ))}
                     </div>
                   </div>
-                  <button onClick={() => createQuiz()} disabled={!hasEnoughText || isGenerating} className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3.5 text-sm font-bold text-primary-foreground transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0" data-testid="button-generate-quiz">
-                    {isGenerating ? <><Loader2 size={16} className="animate-spin" /> Building your quiz…</> : <><Sparkles size={16} /> Make my quiz ({questionCount} questions) <ArrowRight size={15} /></>}
+
+                  <div>
+                    <label className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                      <Timer size={13} className="text-primary" /> Timer / Difficulty
+                    </label>
+                    <div className="mt-1.5 grid grid-cols-4 gap-1.5 text-xs">
+                      {DIFFICULTY_OPTIONS.map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => selectDifficulty(opt.id)}
+                          className={`rounded-xl border py-2 font-bold transition-all ${
+                            difficulty === opt.id
+                              ? 'border-primary bg-primary text-primary-foreground shadow-sm'
+                              : 'border-border bg-background text-muted-foreground hover:border-primary/50 hover:text-foreground'
+                          }`}
+                          data-testid={`button-diff-${opt.id}`}
+                          title={opt.desc}
+                        >
+                          {opt.icon} {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <button onClick={() => createQuiz()} disabled={!hasEnoughText || isGenerating} className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3.5 text-sm font-bold text-primary-foreground transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0" data-testid="button-generate-quiz">
+                    {isGenerating ? <><Loader2 size={16} className="animate-spin" /> Building your quiz…</> : <><Sparkles size={16} /> Make my quiz ({questionCount} Qs) <ArrowRight size={15} /></>}
                   </button>
                   {generateQuiz.isError && <p className="mt-3 text-xs text-destructive" role="alert" data-testid="status-generate-error">{getErrorMessage(generateQuiz.error, 'Quiz generation failed. Try again.')}</p>}
                 </div>
@@ -226,52 +272,80 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="mt-6">
-              <h4 className="text-base font-bold text-foreground">How many questions would you like for this quiz?</h4>
-              <p className="mt-1 text-xs text-muted-foreground">Choose a practice length that fits your study session.</p>
+            <div className="mt-6 space-y-5">
+              <div>
+                <h4 className="text-base font-bold text-foreground">1. How many questions?</h4>
+                <p className="mt-1 text-xs text-muted-foreground">Choose a practice length that fits your study session.</p>
 
-              <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                {[
-                  { count: 3, label: 'Quick', desc: '1-2 mins' },
-                  { count: 5, label: 'Standard', desc: 'Recommended' },
-                  { count: 7, label: 'Deep Dive', desc: '5-7 mins' },
-                  { count: 10, label: 'Mastery', desc: 'Full exam' },
-                ].map((preset) => (
-                  <button
-                    key={preset.count}
-                    type="button"
-                    onClick={() => setQuestionCount(preset.count)}
-                    className={`flex flex-col items-center justify-center rounded-2xl border p-3.5 text-center transition-all ${
-                      questionCount === preset.count
-                        ? 'border-primary bg-primary/10 ring-2 ring-primary text-foreground font-bold shadow-sm'
-                        : 'border-border bg-card text-muted-foreground hover:border-primary/50 hover:bg-muted/50'
-                    }`}
-                  >
-                    <span className="text-2xl font-display">{preset.count}</span>
-                    <span className="mt-1 text-xs font-bold text-foreground">{preset.label}</span>
-                    <span className="text-[10px] text-muted-foreground">{preset.desc}</span>
-                  </button>
-                ))}
+                <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+                  {[
+                    { count: 3, label: 'Quick', desc: '1-2 mins' },
+                    { count: 5, label: 'Standard', desc: 'Recommended' },
+                    { count: 7, label: 'Deep Dive', desc: '5-7 mins' },
+                    { count: 10, label: 'Mastery', desc: 'Full exam' },
+                  ].map((preset) => (
+                    <button
+                      key={preset.count}
+                      type="button"
+                      onClick={() => setQuestionCount(preset.count)}
+                      className={`flex flex-col items-center justify-center rounded-2xl border p-3 text-center transition-all ${
+                        questionCount === preset.count
+                          ? 'border-primary bg-primary/10 ring-2 ring-primary text-foreground font-bold shadow-sm'
+                          : 'border-border bg-card text-muted-foreground hover:border-primary/50 hover:bg-muted/50'
+                      }`}
+                    >
+                      <span className="text-xl font-display">{preset.count}</span>
+                      <span className="mt-0.5 text-xs font-bold text-foreground">{preset.label}</span>
+                      <span className="text-[10px] text-muted-foreground">{preset.desc}</span>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="mt-2.5 flex items-center gap-3 rounded-2xl bg-muted/40 p-2.5">
+                  <label htmlFor="custom-count-input" className="text-xs font-semibold text-muted-foreground whitespace-nowrap">
+                    Or custom questions (1-30):
+                  </label>
+                  <input
+                    id="custom-count-input"
+                    type="number"
+                    min={1}
+                    max={30}
+                    value={questionCount}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value, 10);
+                      if (!isNaN(val) && val >= 1 && val <= 30) {
+                        setQuestionCount(val);
+                      }
+                    }}
+                    className="w-20 rounded-xl border border-border bg-background px-3 py-1.5 text-center text-sm font-bold outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                  />
+                </div>
               </div>
 
-              <div className="mt-4 flex items-center gap-3 rounded-2xl bg-muted/40 p-3">
-                <label htmlFor="custom-count-input" className="text-xs font-semibold text-muted-foreground whitespace-nowrap">
-                  Or custom questions (1-30):
-                </label>
-                <input
-                  id="custom-count-input"
-                  type="number"
-                  min={1}
-                  max={30}
-                  value={questionCount}
-                  onChange={(e) => {
-                    const val = parseInt(e.target.value, 10);
-                    if (!isNaN(val) && val >= 1 && val <= 30) {
-                      setQuestionCount(val);
-                    }
-                  }}
-                  className="w-20 rounded-xl border border-border bg-background px-3 py-1.5 text-center text-sm font-bold outline-none focus:border-primary focus:ring-1 focus:ring-primary"
-                />
+              <div>
+                <h4 className="text-base font-bold text-foreground flex items-center gap-2">
+                  2. Choose your timer challenge <Timer size={16} className="text-primary" />
+                </h4>
+                <p className="mt-1 text-xs text-muted-foreground">Add a countdown timer to test quick recall and reaction speed.</p>
+
+                <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+                  {DIFFICULTY_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => selectDifficulty(opt.id)}
+                      className={`flex flex-col items-center justify-center rounded-2xl border p-3 text-center transition-all ${
+                        difficulty === opt.id
+                          ? 'border-primary bg-primary/10 ring-2 ring-primary text-foreground font-bold shadow-sm'
+                          : 'border-border bg-card text-muted-foreground hover:border-primary/50 hover:bg-muted/50'
+                      }`}
+                    >
+                      <span className="text-lg">{opt.icon}</span>
+                      <span className="mt-0.5 text-xs font-bold text-foreground">{opt.label}</span>
+                      <span className="text-[10px] text-muted-foreground">{opt.desc}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 
@@ -285,7 +359,7 @@ export default function Home() {
                 {isGenerating ? (
                   <><Loader2 size={16} className="animate-spin" /> Building your quiz…</>
                 ) : (
-                  <><Sparkles size={16} /> Start {questionCount}-Question Quiz <ArrowRight size={15} /></>
+                  <><Sparkles size={16} /> Start Quiz ({questionCount} Qs · {DIFFICULTY_OPTIONS.find(d => d.id === difficulty)?.label}) <ArrowRight size={15} /></>
                 )}
               </button>
               <button
@@ -302,4 +376,4 @@ export default function Home() {
       )}
     </AppShell>
   );
-}
+}

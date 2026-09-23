@@ -36,3 +36,32 @@ export function writeQuiz(quiz: Quiz): void {
 export function clearQuiz(): void {
   window.localStorage.removeItem(QUIZ_KEY);
 }
+
+export type QuizDifficulty = 'blitz' | 'challenge' | 'relaxed' | 'untimed';
+
+const DIFFICULTY_KEY = 'docquiz-ai.difficulty';
+
+export function readDifficulty(): QuizDifficulty {
+  if (typeof window === 'undefined') return 'challenge';
+  const val = window.localStorage.getItem(DIFFICULTY_KEY);
+  if (val === 'blitz' || val === 'challenge' || val === 'relaxed' || val === 'untimed') {
+    return val;
+  }
+  return 'challenge';
+}
+
+export function writeDifficulty(difficulty: QuizDifficulty): void {
+  if (typeof window !== 'undefined') {
+    window.localStorage.setItem(DIFFICULTY_KEY, difficulty);
+  }
+}
+
+export function getTimeForDifficulty(difficulty: QuizDifficulty): number | null {
+  switch (difficulty) {
+    case 'blitz': return 15;
+    case 'challenge': return 30;
+    case 'relaxed': return 60;
+    case 'untimed': return null;
+    default: return 30;
+  }
+}
