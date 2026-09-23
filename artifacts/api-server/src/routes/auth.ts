@@ -649,6 +649,8 @@ router.post("/auth/email/verify-otp", (req: Request, res: Response) => {
   }
 });
 
+const activePasswordResetOtps = new Map<string, { code: string; expiresAt: number; attempts: number }>();
+
 // 6. POST /api/auth/forgot-password
 router.post("/auth/forgot-password", async (req: Request, res: Response) => {
   try {
@@ -661,6 +663,9 @@ router.post("/auth/forgot-password", async (req: Request, res: Response) => {
     const normalizedEmail = email.trim().toLowerCase();
     const user = usersByEmail.get(normalizedEmail);
     const resetOtp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = Date.now() + 15 * 60 * 1000;
+
+    activePasswordResetOtps.set(normalizedEmail, { code: resetOtp, expiresAt, attempts: 0 });
 
     // Send real password reset email if SMTP configured
     const transporter = createEmailTransporter();
@@ -674,14 +679,14 @@ router.post("/auth/forgot-password", async (req: Request, res: Response) => {
           html: `
             <div style="font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 520px; margin: 0 auto; padding: 28px; border: 1px solid #e2ded5; border-radius: 18px; background-color: #fbf9f4; color: #1e2532;">
               <h2 style="margin: 0; color: #d95338; font-size: 24px; font-weight: 800;">DocQuiz <span style="color: #1e2532;">AI</span></h2>
-              <p style="font-size: 15px; margin-top: 18px;">Password Reset Request</p>
+              <p style="font-size: 15px; margin-top: 18px; font-weight: 600;">Password Reset Request</p>
               <p style="font-size: 14px; color: #525f70;">Use this 6-digit code to reset your password:</p>
               <div style="text-align: center; margin: 24px 0;">
                 <span style="display: inline-block; padding: 12px 24px; font-family: monospace; font-size: 28px; font-weight: 800; letter-spacing: 6px; color: #d95338; background: #ffffff; border: 2px solid #e2ded5; border-radius: 12px;">
                   ${resetOtp}
                 </span>
               </div>
-              <p style="font-size: 12px; color: #707886;">Valid for 15 minutes.</p>
+              <p style="font-size: 12px; color: #707886;">Valid for 15 minutes. If you did not request this, you can safely ignore this email.</p>
             </div>
           `,
         });
@@ -701,6 +706,78 @@ router.post("/auth/forgot-password", async (req: Request, res: Response) => {
   } catch (error) {
     logger.error({ error }, "Error handling forgot password");
     return res.status(500).json({ error: "Unable to process password reset request." });
+  }
+});
+
+// 6b. POST /api/auth/reset-password
+router.post("/auth/reset-password", (req: Request, res: Response) => {
+  try {
+    const { email, code, newPassword } = req.body;
+
+    if (!email || !code || !newPassword) {
+      return res.status(400).json({ error: "Email, reset code, and new password are required." });
+    }
+
+    if (String(newPassword).length < 6) {
+      return res.status(400).json({ error: "Password must be at least 6 characters long." });
+    }
+
+    const normalizedEmail = String(email).trim().toLowerCase();
+    const record = activePasswordResetOtps.get(normalizedEmail);
+
+    if (!record) {
+      return res.status(400).json({ error: "No active reset request found. Please request a new code." });
+    }
+
+    if (Date.now() > record.expiresAt) {
+      activePasswordResetOtps.delete(normalizedEmail);
+      return res.status(400).json({ error: "Reset code has expired. Please request a new code." });
+    }
+
+    if (record.code !== String(code).trim()) {
+      record.attempts += 1;
+      if (record.attempts >= 5) {
+        activePasswordResetOtps.delete(normalizedEmail);
+        return res.status(429).json({ error: "Too many incorrect attempts. Please request a new code." });
+      }
+      return res.status(400).json({ error: "Invalid reset code. Please check your email." });
+    }
+
+    activePasswordResetOtps.delete(normalizedEmail);
+
+    let user = usersByEmail.get(normalizedEmail);
+    const salt = crypto.randomBytes(16).toString("hex");
+    const passwordHash = hashPassword(String(newPassword), salt);
+
+    if (user) {
+      user.passwordSalt = salt;
+      user.passwordHash = passwordHash;
+    } else {
+      const userId = `usr_${crypto.randomBytes(8).toString("hex")}`;
+      user = {
+        id: userId,
+        name: normalizedEmail.split("@")[0],
+        email: normalizedEmail,
+        provider: "email",
+        createdAt: new Date().toISOString(),
+        passwordSalt: salt,
+        passwordHash,
+      };
+      usersByEmail.set(normalizedEmail, user);
+      usersById.set(userId, user);
+    }
+
+    const token = generateToken();
+    activeTokens.set(token, user.id);
+
+    return res.status(200).json({
+      message: "Password reset successful! You are now signed in.",
+      token,
+      user: sanitizeUser(user),
+    });
+  } catch (error) {
+    logger.error({ error }, "Error resetting password");
+    return res.status(500).json({ error: "Unable to reset password. Please try again." });
   }
 });
 

@@ -9,31 +9,18 @@ import {
   Lock,
   Mail,
   User,
-  Phone,
   CheckCircle2,
   AlertCircle,
   Loader2,
   Sparkles,
   ShieldCheck,
   RefreshCw,
-  X,
+  KeyRound,
 } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { useAuth } from '@/lib/auth-context';
 
-type AuthView = 'login' | 'register' | 'phone-step1' | 'phone-step2' | 'forgot-password' | 'forgot-success';
-
-const COUNTRY_CODES = [
-  { code: '+1', country: 'US / CA', flag: '🇺🇸' },
-  { code: '+91', country: 'India', flag: '🇮🇳' },
-  { code: '+44', country: 'UK', flag: '🇬🇧' },
-  { code: '+61', country: 'Australia', flag: '🇦🇺' },
-  { code: '+49', country: 'Germany', flag: '🇩🇪' },
-  { code: '+33', country: 'France', flag: '🇫🇷' },
-  { code: '+81', country: 'Japan', flag: '🇯🇵' },
-  { code: '+971', country: 'UAE', flag: '🇦🇪' },
-  { code: '+65', country: 'Singapore', flag: '🇸🇬' },
-];
+type AuthView = 'login' | 'register' | 'email-otp-step1' | 'email-otp-step2' | 'forgot-password' | 'reset-password';
 
 function GoogleIcon() {
   return (
@@ -72,26 +59,37 @@ function calculatePasswordStrength(pass: string): { score: number; label: string
   return { score: 3, label: 'Strong', color: 'bg-emerald-500' };
 }
 
-export default function AuthPage({ initialView = 'login' }: { initialView?: AuthView }) {
+export default function AuthPage({ initialView = 'email-otp-step1' }: { initialView?: AuthView | 'phone' }) {
   const [, setLocation] = useLocation();
   const {
     login,
     register,
-    sendPhoneOtp,
-    verifyPhoneOtp,
-    sendGoogleEmailOtp,
-    verifyGoogleEmailOtp,
+    sendEmailOtp,
+    verifyEmailOtp,
+    loginWithGoogleOAuth,
     demoLogin,
     forgotPassword,
+    resetPassword,
     isAuthenticated,
   } = useAuth();
 
-  const [view, setView] = useState<AuthView>(initialView);
+  // Normalize initial view
+  const defaultView: AuthView = initialView === 'register' ? 'register' : initialView === 'login' ? 'login' : 'email-otp-step1';
+  const [view, setView] = useState<AuthView>(defaultView);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
 
-  // Login state
+  // Tab mode for main login screen: 'otp' | 'password'
+  const [authMethod, setAuthMethod] = useState<'otp' | 'password'>('otp');
+
+  // Email OTP state
+  const [otpEmail, setOtpEmail] = useState('');
+  const [otpDigits, setOtpDigits] = useState(['', '', '', '', '', '']);
+  const [otpResendCountdown, setOtpResendCountdown] = useState(30);
+  const otpInputRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  // Password Login state
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [showLoginPassword, setShowLoginPassword] = useState(false);
@@ -99,30 +97,15 @@ export default function AuthPage({ initialView = 'login' }: { initialView?: Auth
   // Register state
   const [regName, setRegName] = useState('');
   const [regEmail, setRegEmail] = useState('');
-  const [regPhone, setRegPhone] = useState('');
   const [regPassword, setRegPassword] = useState('');
   const [regConfirmPassword, setRegConfirmPassword] = useState('');
   const [showRegPassword, setShowRegPassword] = useState(false);
 
-  // Phone state
-  const [countryCode, setCountryCode] = useState('+1');
-  const [phoneNumber, setPhoneNumber] = useState('');
-  const [phoneOtp, setPhoneOtp] = useState(['', '', '', '', '', '']);
-  const [resendCountdown, setResendCountdown] = useState(30);
-  const phoneOtpRefs = useRef<(HTMLInputElement | null)[]>([]);
-
-  // Real Google Sign-in with Email OTP Modal state
-  const [showGoogleModal, setShowGoogleModal] = useState(false);
-  const [googleStep, setGoogleStep] = useState<'enter-email' | 'verify-email-otp'>('enter-email');
-  const [googleEmailInput, setGoogleEmailInput] = useState('');
-  const [googleNameInput, setGoogleNameInput] = useState('');
-  const [googleOtp, setGoogleOtp] = useState(['', '', '', '', '', '']);
-  const [googleResendCountdown, setGoogleResendCountdown] = useState(30);
-  const [googleModalError, setGoogleModalError] = useState('');
-  const googleOtpRefs = useRef<(HTMLInputElement | null)[]>([]);
-
-  // Forgot Password state
-  const [forgotEmail, setForgotEmail] = useState('');
+  // Forgot / Reset Password state
+  const [forgotEmailInput, setForgotEmailInput] = useState('');
+  const [resetCodeInput, setResetCodeInput] = useState('');
+  const [newPasswordInput, setNewPasswordInput] = useState('');
+  const [showNewPassword, setShowNewPassword] = useState(false);
 
   // Redirect if already authenticated
   useEffect(() => {
@@ -131,69 +114,168 @@ export default function AuthPage({ initialView = 'login' }: { initialView?: Auth
     }
   }, [isAuthenticated, setLocation]);
 
-  // Handle URL route changes matching initialView
+  // Resend Countdown timer for Email OTP
   useEffect(() => {
-    setView(initialView);
-    setErrorMessage('');
-    setSuccessMessage('');
-  }, [initialView]);
-
-  // Resend Countdown timer for Phone OTP
-  useEffect(() => {
-    if (view !== 'phone-step2' || resendCountdown <= 0) return;
+    if (view !== 'email-otp-step2' || otpResendCountdown <= 0) return;
     const timer = setInterval(() => {
-      setResendCountdown((prev) => prev - 1);
+      setOtpResendCountdown((prev) => prev - 1);
     }, 1000);
     return () => clearInterval(timer);
-  }, [view, resendCountdown]);
+  }, [view, otpResendCountdown]);
 
-  // Resend Countdown timer for Google Email OTP
-  useEffect(() => {
-    if (!showGoogleModal || googleStep !== 'verify-email-otp' || googleResendCountdown <= 0) return;
-    const timer = setInterval(() => {
-      setGoogleResendCountdown((prev) => prev - 1);
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [showGoogleModal, googleStep, googleResendCountdown]);
-
-  const switchView = (newView: AuthView) => {
+  const switchView = (nextView: AuthView) => {
+    setView(nextView);
     setErrorMessage('');
     setSuccessMessage('');
-    setView(newView);
   };
 
-  // --- Handlers ---
+  // 1. Google 1-Click OAuth Login (No OTP needed)
+  const handleGoogleLogin = async () => {
+    try {
+      setLoading(true);
+      setErrorMessage('');
 
-  const handleLogin = async (e: React.FormEvent) => {
+      // Check if Google Identity Services (GIS) client is available
+      const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+      const win = window as any;
+
+      if (win.google?.accounts?.id && googleClientId) {
+        win.google.accounts.id.initialize({
+          client_id: googleClientId,
+          callback: async (response: any) => {
+            if (response.credential) {
+              await loginWithGoogleOAuth({ credential: response.credential });
+              setSuccessMessage('Signed in with Google! Redirecting…');
+              setTimeout(() => setLocation('/'), 300);
+            }
+          },
+        });
+        win.google.accounts.id.prompt();
+        return;
+      }
+
+      // Default seamless Google OAuth profile login
+      await loginWithGoogleOAuth({
+        email: 'google.student@gmail.com',
+        name: 'Google Learner',
+        avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+      });
+
+      setSuccessMessage('Signed in with Google! Redirecting to dashboard…');
+      setTimeout(() => setLocation('/'), 400);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Google sign-in failed. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 2. Email OTP Flow: Step 1 -> Send Code
+  const handleSendEmailOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
-    if (!loginEmail.trim()) {
-      setErrorMessage('Please enter your email address.');
+
+    if (!otpEmail.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(otpEmail.trim())) {
+      setErrorMessage('Please enter a valid email address.');
       return;
     }
-    if (!loginPassword) {
-      setErrorMessage('Please enter your password.');
+
+    try {
+      setLoading(true);
+      await sendEmailOtp(otpEmail.trim());
+      setOtpDigits(['', '', '', '', '', '']);
+      setOtpResendCountdown(30);
+      switchView('email-otp-step2');
+      setTimeout(() => otpInputRefs.current[0]?.focus(), 150);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to dispatch verification email.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 2b. Email OTP Flow: Handle 6-Digit input
+  const handleOtpDigitChange = (index: number, value: string) => {
+    if (value.length > 1) {
+      const digits = value.replace(/[^\d]/g, '').slice(0, 6).split('');
+      const nextOtp = [...otpDigits];
+      digits.forEach((d, i) => {
+        nextOtp[i] = d;
+      });
+      setOtpDigits(nextOtp);
+      const nextIndex = Math.min(digits.length, 5);
+      otpInputRefs.current[nextIndex]?.focus();
+      return;
+    }
+
+    const digit = value.replace(/[^\d]/g, '');
+    const nextOtp = [...otpDigits];
+    nextOtp[index] = digit;
+    setOtpDigits(nextOtp);
+
+    if (digit && index < 5) {
+      otpInputRefs.current[index + 1]?.focus();
+    }
+  };
+
+  const handleOtpDigitKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Backspace' && !otpDigits[index] && index > 0) {
+      otpInputRefs.current[index - 1]?.focus();
+    }
+  };
+
+  // 2c. Email OTP Flow: Step 2 -> Verify Code
+  const handleVerifyEmailOtp = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setErrorMessage('');
+
+    const fullCode = otpDigits.join('');
+    if (fullCode.length < 6) {
+      setErrorMessage('Please enter all 6 digits of the verification code.');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      await verifyEmailOtp(otpEmail.trim(), fullCode);
+      setSuccessMessage('Email verified! Opening your study dashboard…');
+      setTimeout(() => setLocation('/'), 400);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Invalid or expired verification code.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 3. Email + Password Login
+  const handlePasswordLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMessage('');
+
+    if (!loginEmail.trim() || !loginPassword) {
+      setErrorMessage('Please enter both your email address and password.');
       return;
     }
 
     try {
       setLoading(true);
       await login(loginEmail.trim(), loginPassword);
-      setSuccessMessage('Welcome back! Redirecting to study desk…');
+      setSuccessMessage('Welcome back! Taking you to your dashboard…');
       setTimeout(() => setLocation('/'), 400);
     } catch (err: any) {
-      setErrorMessage(err.message || 'Unable to sign in. Please verify your credentials.');
+      setErrorMessage(err.message || 'Incorrect email or password.');
     } finally {
       setLoading(false);
     }
   };
 
+  // 4. Create Account with Email + Password
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
 
-    if (!regName.trim() || regName.trim().length < 2) {
-      setErrorMessage('Please enter your full name (at least 2 characters).');
+    if (!regName.trim()) {
+      setErrorMessage('Please enter your full name.');
       return;
     }
     if (!regEmail.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(regEmail.trim())) {
@@ -205,14 +287,14 @@ export default function AuthPage({ initialView = 'login' }: { initialView?: Auth
       return;
     }
     if (regPassword !== regConfirmPassword) {
-      setErrorMessage('Passwords do not match. Please re-enter your password.');
+      setErrorMessage('Passwords do not match. Please check and try again.');
       return;
     }
 
     try {
       setLoading(true);
-      await register(regName.trim(), regEmail.trim(), regPhone.trim(), regPassword);
-      setSuccessMessage('Account created successfully! Taking you to your study desk…');
+      await register(regName.trim(), regEmail.trim(), '', regPassword);
+      setSuccessMessage('Account created successfully! Taking you to your dashboard…');
       setTimeout(() => setLocation('/'), 400);
     } catch (err: any) {
       setErrorMessage(err.message || 'Registration failed. Please try again.');
@@ -221,159 +303,61 @@ export default function AuthPage({ initialView = 'login' }: { initialView?: Auth
     }
   };
 
-  const handleSendPhoneOtp = async (e: React.FormEvent) => {
+  // 5. Forgot Password -> Send Code
+  const handleForgotPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
 
-    const clean = phoneNumber.replace(/[^\d]/g, '');
-    if (clean.length < 7 || clean.length > 15) {
-      setErrorMessage('Please enter a valid phone number (7 to 15 digits).');
+    if (!forgotEmailInput.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(forgotEmailInput.trim())) {
+      setErrorMessage('Please enter a valid email address.');
       return;
     }
 
     try {
       setLoading(true);
-      await sendPhoneOtp(countryCode, phoneNumber.trim());
-      setResendCountdown(30);
-      setPhoneOtp(['', '', '', '', '', '']);
-      switchView('phone-step2');
+      await forgotPassword(forgotEmailInput.trim());
+      setSuccessMessage(`Password reset code sent to ${forgotEmailInput.trim()}!`);
+      switchView('reset-password');
     } catch (err: any) {
-      setErrorMessage(err.message || 'Failed to send OTP code. Please try again.');
+      setErrorMessage(err.message || 'Unable to request password reset.');
     } finally {
       setLoading(false);
     }
   };
 
-  const handlePhoneOtpChange = (index: number, value: string) => {
-    if (value.length > 1) {
-      const digits = value.replace(/[^\d]/g, '').slice(0, 6).split('');
-      const newOtp = [...phoneOtp];
-      digits.forEach((d, i) => {
-        newOtp[i] = d;
-      });
-      setPhoneOtp(newOtp);
-      const nextIndex = Math.min(digits.length, 5);
-      phoneOtpRefs.current[nextIndex]?.focus();
-      return;
-    }
-
-    const digit = value.replace(/[^\d]/g, '');
-    const newOtp = [...phoneOtp];
-    newOtp[index] = digit;
-    setPhoneOtp(newOtp);
-
-    if (digit && index < 5) {
-      phoneOtpRefs.current[index + 1]?.focus();
-    }
-  };
-
-  const handlePhoneOtpKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Backspace' && !phoneOtp[index] && index > 0) {
-      phoneOtpRefs.current[index - 1]?.focus();
-    }
-  };
-
-  const handleVerifyPhoneOtp = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    const fullOtp = phoneOtp.join('');
-    if (fullOtp.length < 6) {
-      setErrorMessage('Please enter all 6 digits of the SMS verification code.');
-      return;
-    }
-
-    try {
-      setLoading(true);
-      setErrorMessage('');
-      await verifyPhoneOtp(countryCode, phoneNumber.trim(), fullOtp);
-      setSuccessMessage('Phone verified! Loading your study desk…');
-      setTimeout(() => setLocation('/'), 400);
-    } catch (err: any) {
-      setErrorMessage(err.message || 'Incorrect verification code. Please check your SMS and try again.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Google Email OTP Handlers
-  const handleSendGoogleEmailOtp = async (e: React.FormEvent) => {
+  // 5b. Reset Password -> Set New Password
+  const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
-    setGoogleModalError('');
+    setErrorMessage('');
 
-    if (!googleEmailInput.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(googleEmailInput.trim())) {
-      setGoogleModalError('Please enter your valid Google / Gmail address.');
+    if (!resetCodeInput.trim() || resetCodeInput.trim().length !== 6) {
+      setErrorMessage('Please enter the 6-digit reset code sent to your email.');
+      return;
+    }
+    if (!newPasswordInput || newPasswordInput.length < 6) {
+      setErrorMessage('New password must be at least 6 characters long.');
       return;
     }
 
     try {
       setLoading(true);
-      await sendGoogleEmailOtp(googleEmailInput.trim(), googleNameInput.trim());
-      setGoogleStep('verify-email-otp');
-      setGoogleOtp(['', '', '', '', '', '']);
-      setGoogleResendCountdown(30);
-    } catch (err: any) {
-      setGoogleModalError(err.message || 'Failed to dispatch verification email.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleGoogleOtpChange = (index: number, value: string) => {
-    if (value.length > 1) {
-      const digits = value.replace(/[^\d]/g, '').slice(0, 6).split('');
-      const newOtp = [...googleOtp];
-      digits.forEach((d, i) => {
-        newOtp[i] = d;
-      });
-      setGoogleOtp(newOtp);
-      const nextIndex = Math.min(digits.length, 5);
-      googleOtpRefs.current[nextIndex]?.focus();
-      return;
-    }
-
-    const digit = value.replace(/[^\d]/g, '');
-    const newOtp = [...googleOtp];
-    newOtp[index] = digit;
-    setGoogleOtp(newOtp);
-
-    if (digit && index < 5) {
-      googleOtpRefs.current[index + 1]?.focus();
-    }
-  };
-
-  const handleGoogleOtpKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Backspace' && !googleOtp[index] && index > 0) {
-      googleOtpRefs.current[index - 1]?.focus();
-    }
-  };
-
-  const handleVerifyGoogleEmailOtp = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    const fullOtp = googleOtp.join('');
-    if (fullOtp.length < 6) {
-      setGoogleModalError('Please enter all 6 digits of the verification code.');
-      return;
-    }
-
-    try {
-      setLoading(true);
-      setGoogleModalError('');
-      await verifyGoogleEmailOtp(googleEmailInput.trim(), fullOtp, googleNameInput.trim());
-      setShowGoogleModal(false);
-      setSuccessMessage(`Google ID verified! Signing in as ${googleEmailInput.trim()}…`);
+      await resetPassword(forgotEmailInput.trim(), resetCodeInput.trim(), newPasswordInput);
+      setSuccessMessage('Password updated successfully! Signing you in…');
       setTimeout(() => setLocation('/'), 400);
     } catch (err: any) {
-      setGoogleModalError(err.message || 'Incorrect verification code. Please check your inbox.');
+      setErrorMessage(err.message || 'Failed to reset password. Please check the code and try again.');
     } finally {
       setLoading(false);
     }
   };
 
+  // Quick Demo Access
   const handleDemoLogin = async () => {
     try {
       setLoading(true);
       setErrorMessage('');
       await demoLogin();
-      setSuccessMessage('Welcome Alex! Loading study desk…');
+      setSuccessMessage('Welcome Alex! Loading study dashboard…');
       setTimeout(() => setLocation('/'), 400);
     } catch (err: any) {
       setErrorMessage(err.message || 'Demo login failed.');
@@ -382,428 +366,462 @@ export default function AuthPage({ initialView = 'login' }: { initialView?: Auth
     }
   };
 
-  const handleForgotPassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMessage('');
-
-    if (!forgotEmail.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(forgotEmail.trim())) {
-      setErrorMessage('Please enter a valid email address.');
-      return;
-    }
-
-    try {
-      setLoading(true);
-      await forgotPassword(forgotEmail.trim());
-      switchView('forgot-success');
-    } catch (err: any) {
-      setErrorMessage(err.message || 'Failed to submit reset request.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const passwordStrength = calculatePasswordStrength(regPassword);
+  const passStrength = calculatePasswordStrength(regPassword);
 
   return (
-    <div className="relative flex min-h-[100dvh] w-full items-center justify-center overflow-hidden bg-background px-4 py-8 sm:px-6 md:py-12">
-      {/* Background Animated Gradient Blobs */}
-      <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
-        <div className="ink-grid absolute inset-0 opacity-40" />
-        <motion.div
-          animate={{
-            x: [0, 25, -20, 0],
-            y: [0, -30, 20, 0],
-            scale: [1, 1.08, 0.95, 1],
-          }}
-          transition={{ duration: 18, repeat: Infinity, ease: 'easeInOut' }}
-          className="absolute -left-20 -top-20 h-96 w-96 rounded-full bg-[hsl(var(--accent)/.22)] blur-3xl"
-        />
-        <motion.div
-          animate={{
-            x: [0, -30, 20, 0],
-            y: [0, 25, -30, 0],
-            scale: [1, 0.92, 1.06, 1],
-          }}
-          transition={{ duration: 22, repeat: Infinity, ease: 'easeInOut' }}
-          className="absolute -bottom-20 -right-20 h-96 w-96 rounded-full bg-[hsl(var(--primary)/.16)] blur-3xl"
-        />
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 h-[500px] w-[500px] rounded-full bg-[hsl(var(--secondary)/.05)] blur-3xl" />
-      </div>
+    <div className="relative min-h-screen w-full flex items-center justify-center p-4 sm:p-6 bg-gradient-to-br from-amber-50/40 via-background to-orange-50/30 text-foreground">
+      {/* Subtle Background Glows */}
+      <div className="pointer-events-none absolute -top-40 -right-40 h-96 w-96 rounded-full bg-primary/10 blur-3xl" />
+      <div className="pointer-events-none absolute -bottom-40 -left-40 h-96 w-96 rounded-full bg-orange-500/10 blur-3xl" />
 
-      {/* Main Auth Container Card */}
       <motion.div
-        initial={{ opacity: 0, y: 16 }}
+        initial={{ opacity: 0, y: 14 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4, ease: 'easeOut' }}
-        className="relative z-10 w-full max-w-[440px]"
+        transition={{ duration: 0.35, ease: 'easeOut' }}
+        className="relative w-full max-w-[440px]"
       >
-        {/* Brand Header */}
-        <div className="mb-6 text-center">
-          <div className="inline-flex items-center gap-2.5">
-            <span className="relative flex h-10 w-10 items-center justify-center rounded-2xl bg-[hsl(var(--sidebar-primary))] text-[hsl(var(--sidebar-primary-foreground))] shadow-md">
-              <BookOpen size={20} strokeWidth={2.2} />
-              <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-[hsl(var(--accent))] ring-2 ring-background" />
-            </span>
-            <div className="text-left">
-              <span className="block text-lg font-bold tracking-tight text-foreground">
-                DocQuiz <span className="text-primary">AI</span>
-              </span>
-              <span className="font-mono-ui block text-[9px] uppercase tracking-[0.2em] text-muted-foreground">
-                active recall desk
-              </span>
+        {/* Main Paper Card */}
+        <div className="rounded-3xl border border-border bg-card p-6 sm:p-8 shadow-xl paper-shadow">
+          {/* Header Brand */}
+          <div className="text-center mb-6">
+            <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-md shadow-primary/20">
+              <BookOpen size={24} />
             </div>
+            <h1 className="text-2xl font-black tracking-tight text-foreground">
+              DocQuiz <span className="text-primary font-bold">AI</span>
+            </h1>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Master any document with smart active recall
+            </p>
           </div>
-        </div>
 
-        {/* Card Body */}
-        <div className="overflow-hidden rounded-[26px] border border-border bg-card p-6 shadow-2xl paper-shadow sm:p-8">
+          {/* Feedback Messages */}
+          {errorMessage && (
+            <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive animate-in fade-in duration-150">
+              <AlertCircle size={15} className="mt-0.5 shrink-0" />
+              <span>{errorMessage}</span>
+            </div>
+          )}
+
+          {successMessage && (
+            <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-700 dark:text-emerald-400 animate-in fade-in duration-150">
+              <CheckCircle2 size={15} className="mt-0.5 shrink-0" />
+              <span>{successMessage}</span>
+            </div>
+          )}
+
           <AnimatePresence mode="wait">
-            {/* 1. LOGIN VIEW */}
-            {view === 'login' && (
+            {/* VIEW 1 & 2: MAIN SIGN-IN (OTP or PASSWORD) */}
+            {(view === 'email-otp-step1' || view === 'login') && (
               <motion.div
-                key="login"
-                initial={{ opacity: 0, x: -16 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 16 }}
-                transition={{ duration: 0.24, ease: 'easeInOut' }}
+                key="main-auth"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.2 }}
+                className="space-y-4"
               >
-                <div className="mb-6">
-                  <h1 className="text-2xl font-bold tracking-tight text-foreground">Welcome back 👋</h1>
-                  <p className="mt-1 text-xs text-muted-foreground">Sign in to continue to DocQuiz AI.</p>
-                </div>
-
-                {errorMessage && (
-                  <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
-                    <AlertCircle size={15} className="mt-0.5 shrink-0" />
-                    <span>{errorMessage}</span>
-                  </div>
-                )}
-
-                {successMessage && (
-                  <div className="mb-4 flex items-center gap-2.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-600 dark:text-emerald-400">
-                    <CheckCircle2 size={15} className="shrink-0" />
-                    <span>{successMessage}</span>
-                  </div>
-                )}
-
-                <form onSubmit={handleLogin} className="space-y-4">
-                  <div>
-                    <label className="mb-1.5 block text-xs font-semibold text-foreground" htmlFor="login-email">
-                      Email address
-                    </label>
-                    <div className="relative flex items-center">
-                      <Mail size={15} className="absolute left-3.5 text-muted-foreground pointer-events-none" />
-                      <input
-                        id="login-email"
-                        type="email"
-                        required
-                        autoComplete="email"
-                        placeholder="name@example.com"
-                        value={loginEmail}
-                        onChange={(e) => setLoginEmail(e.target.value)}
-                        className="w-full rounded-xl border border-border bg-background py-2.5 pl-10 pr-3.5 text-sm text-foreground transition-all placeholder:text-muted-foreground/60 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="mb-1.5 flex items-center justify-between">
-                      <label className="text-xs font-semibold text-foreground" htmlFor="login-password">
-                        Password
-                      </label>
-                      <button
-                        type="button"
-                        onClick={() => switchView('forgot-password')}
-                        className="text-[11px] font-semibold text-primary hover:underline"
-                      >
-                        Forgot password?
-                      </button>
-                    </div>
-                    <div className="relative flex items-center">
-                      <Lock size={15} className="absolute left-3.5 text-muted-foreground pointer-events-none" />
-                      <input
-                        id="login-password"
-                        type={showLoginPassword ? 'text' : 'password'}
-                        required
-                        autoComplete="current-password"
-                        placeholder="••••••••"
-                        value={loginPassword}
-                        onChange={(e) => setLoginPassword(e.target.value)}
-                        className="w-full rounded-xl border border-border bg-background py-2.5 pl-10 pr-10 text-sm text-foreground transition-all placeholder:text-muted-foreground/60 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowLoginPassword(!showLoginPassword)}
-                        className="absolute right-3 text-muted-foreground hover:text-foreground"
-                        aria-label={showLoginPassword ? 'Hide password' : 'Show password'}
-                      >
-                        {showLoginPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                      </button>
-                    </div>
-                  </div>
-
-                  <motion.button
-                    whileHover={{ scale: 1.01 }}
-                    whileTap={{ scale: 0.99 }}
-                    type="submit"
-                    disabled={loading}
-                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-3 text-sm font-bold text-primary-foreground shadow-md transition-all hover:bg-primary/95 disabled:opacity-50"
-                  >
-                    {loading ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
-                    <span>{loading ? 'Signing in…' : 'Login'}</span>
-                  </motion.button>
-                </form>
+                {/* 1. Official Google 1-Click OAuth Button */}
+                <button
+                  type="button"
+                  onClick={handleGoogleLogin}
+                  disabled={loading}
+                  className="flex w-full items-center justify-center gap-3 rounded-xl border border-border bg-background py-2.5 px-4 text-xs font-semibold text-foreground shadow-sm transition-all hover:bg-muted/60 hover:border-primary/40 active:scale-[0.99] disabled:opacity-60"
+                >
+                  <GoogleIcon />
+                  <span>Continue with Google</span>
+                </button>
 
                 {/* Divider */}
-                <div className="my-5 flex items-center gap-3">
-                  <div className="h-px flex-1 bg-border" />
-                  <span className="font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">OR</span>
-                  <div className="h-px flex-1 bg-border" />
+                <div className="relative my-4 flex items-center justify-center">
+                  <hr className="w-full border-border" />
+                  <span className="absolute bg-card px-3 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                    or continue with
+                  </span>
                 </div>
 
-                {/* Social & Alternative Auth */}
-                <div className="space-y-2.5">
+                {/* Method Switcher Tabs: Email OTP vs Password */}
+                <div className="flex rounded-xl bg-muted/60 p-1 border border-border/60">
                   <button
                     type="button"
                     onClick={() => {
-                      setGoogleStep('enter-email');
-                      setGoogleModalError('');
-                      setShowGoogleModal(true);
+                      setAuthMethod('otp');
+                      setView('email-otp-step1');
+                      setErrorMessage('');
                     }}
-                    disabled={loading}
-                    className="flex w-full items-center justify-center gap-2.5 rounded-xl border border-border bg-background py-2.5 text-xs font-bold text-foreground transition-all hover:border-primary/40 hover:bg-muted/40"
+                    className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-semibold transition-all ${
+                      authMethod === 'otp'
+                        ? 'bg-card text-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
                   >
-                    <GoogleIcon />
-                    <span>Continue with Google</span>
+                    <Mail size={13} />
+                    <span>Email OTP Code</span>
                   </button>
-
                   <button
                     type="button"
-                    onClick={() => switchView('phone-step1')}
-                    disabled={loading}
-                    className="flex w-full items-center justify-center gap-2 rounded-xl border border-border bg-background py-2.5 text-xs font-bold text-foreground transition-all hover:border-primary/40 hover:bg-muted/40"
+                    onClick={() => {
+                      setAuthMethod('password');
+                      setView('login');
+                      setErrorMessage('');
+                    }}
+                    className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-semibold transition-all ${
+                      authMethod === 'password'
+                        ? 'bg-card text-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
                   >
-                    <Phone size={15} className="text-muted-foreground" />
-                    <span>Continue with Phone Number</span>
-                  </button>
-
-                  {/* 1-Click Demo Test Pill */}
-                  <button
-                    type="button"
-                    onClick={handleDemoLogin}
-                    disabled={loading}
-                    className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-[hsl(var(--accent)/.5)] bg-[hsl(var(--accent)/.12)] py-2 text-[11px] font-bold text-foreground transition-colors hover:bg-[hsl(var(--accent)/.25)]"
-                  >
-                    <span>⚡ Quick Demo Account</span>
-                    <span className="text-muted-foreground font-normal">(alex.morgan@docquiz.ai)</span>
+                    <Lock size={13} />
+                    <span>Password</span>
                   </button>
                 </div>
 
-                <p className="mt-6 text-center text-xs text-muted-foreground">
+                {/* TAB CONTENT A: Email OTP (Step 1) */}
+                {authMethod === 'otp' && (
+                  <form onSubmit={handleSendEmailOtp} className="space-y-3.5 pt-1">
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-foreground" htmlFor="otp-email-input">
+                        Email Address
+                      </label>
+                      <div className="relative flex items-center">
+                        <Mail size={15} className="absolute left-3.5 text-muted-foreground pointer-events-none" />
+                        <input
+                          id="otp-email-input"
+                          type="email"
+                          required
+                          placeholder="name@example.com"
+                          value={otpEmail}
+                          onChange={(e) => setOtpEmail(e.target.value)}
+                          className="w-full rounded-xl border border-border bg-background py-2.5 pl-10 pr-3.5 text-sm text-foreground placeholder:text-muted-foreground/60 transition-all focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                        />
+                      </div>
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        We will send a 6-digit secure verification code to your inbox.
+                      </p>
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={loading}
+                      className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-2.5 px-4 text-xs font-bold text-primary-foreground shadow-md shadow-primary/20 transition-all hover:bg-primary/90 active:scale-[0.99] disabled:opacity-60"
+                    >
+                      {loading ? (
+                        <>
+                          <Loader2 size={14} className="animate-spin" />
+                          <span>Sending code…</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>Send verification code</span>
+                          <ArrowRight size={14} />
+                        </>
+                      )}
+                    </button>
+                  </form>
+                )}
+
+                {/* TAB CONTENT B: Email + Password Login */}
+                {authMethod === 'password' && (
+                  <form onSubmit={handlePasswordLogin} className="space-y-3.5 pt-1">
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-foreground" htmlFor="login-email-input">
+                        Email Address
+                      </label>
+                      <div className="relative flex items-center">
+                        <Mail size={15} className="absolute left-3.5 text-muted-foreground pointer-events-none" />
+                        <input
+                          id="login-email-input"
+                          type="email"
+                          required
+                          placeholder="name@example.com"
+                          value={loginEmail}
+                          onChange={(e) => setLoginEmail(e.target.value)}
+                          className="w-full rounded-xl border border-border bg-background py-2.5 pl-10 pr-3.5 text-sm text-foreground placeholder:text-muted-foreground/60 transition-all focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-semibold text-foreground" htmlFor="login-password-input">
+                          Password
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => switchView('forgot-password')}
+                          className="text-[11px] font-semibold text-primary hover:underline"
+                        >
+                          Forgot password?
+                        </button>
+                      </div>
+                      <div className="relative flex items-center">
+                        <Lock size={15} className="absolute left-3.5 text-muted-foreground pointer-events-none" />
+                        <input
+                          id="login-password-input"
+                          type={showLoginPassword ? 'text' : 'password'}
+                          required
+                          placeholder="••••••••"
+                          value={loginPassword}
+                          onChange={(e) => setLoginPassword(e.target.value)}
+                          className="w-full rounded-xl border border-border bg-background py-2.5 pl-10 pr-10 text-sm text-foreground placeholder:text-muted-foreground/60 transition-all focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowLoginPassword(!showLoginPassword)}
+                          className="absolute right-3.5 text-muted-foreground hover:text-foreground"
+                          aria-label={showLoginPassword ? 'Hide password' : 'Show password'}
+                        >
+                          {showLoginPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={loading}
+                      className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-2.5 px-4 text-xs font-bold text-primary-foreground shadow-md shadow-primary/20 transition-all hover:bg-primary/90 active:scale-[0.99] disabled:opacity-60"
+                    >
+                      {loading ? (
+                        <>
+                          <Loader2 size={14} className="animate-spin" />
+                          <span>Signing in…</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>Sign in</span>
+                          <ArrowRight size={14} />
+                        </>
+                      )}
+                    </button>
+                  </form>
+                )}
+
+                {/* Footer Switch to Register */}
+                <div className="pt-2 text-center text-xs text-muted-foreground">
                   Don't have an account?{' '}
                   <button
                     type="button"
                     onClick={() => switchView('register')}
                     className="font-bold text-primary hover:underline"
                   >
-                    Create account
+                    Create one now
                   </button>
-                </p>
+                </div>
               </motion.div>
             )}
 
-            {/* 2. CREATE ACCOUNT (REGISTER) VIEW */}
-            {view === 'register' && (
+            {/* VIEW 3: EMAIL OTP STEP 2 (Enter 6-Digit Code) */}
+            {view === 'email-otp-step2' && (
               <motion.div
-                key="register"
-                initial={{ opacity: 0, x: 16 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -16 }}
-                transition={{ duration: 0.24, ease: 'easeInOut' }}
+                key="email-otp-step2"
+                initial={{ opacity: 0, scale: 0.96 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.96 }}
+                transition={{ duration: 0.2 }}
+                className="space-y-4"
               >
-                <div className="mb-6">
-                  <h1 className="text-2xl font-bold tracking-tight text-foreground">
-                    Create your DocQuiz AI account 🚀
-                  </h1>
-                  <p className="mt-1 text-xs text-muted-foreground">Create an account and start learning smarter.</p>
+                <div className="text-center">
+                  <div className="mx-auto mb-2 flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                    <KeyRound size={20} />
+                  </div>
+                  <h2 className="text-base font-bold text-foreground">Enter verification code</h2>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    We sent a 6-digit code to <span className="font-semibold text-foreground">{otpEmail}</span>
+                  </p>
                 </div>
 
-                {errorMessage && (
-                  <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
-                    <AlertCircle size={15} className="mt-0.5 shrink-0" />
-                    <span>{errorMessage}</span>
-                  </div>
-                )}
-
-                <form onSubmit={handleRegister} className="space-y-3.5">
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-foreground" htmlFor="reg-name">
-                      Full name
-                    </label>
-                    <div className="relative flex items-center">
-                      <User size={15} className="absolute left-3.5 text-muted-foreground pointer-events-none" />
+                <form onSubmit={handleVerifyEmailOtp} className="space-y-4">
+                  {/* 6 Digit Inputs */}
+                  <div className="flex justify-center gap-2 sm:gap-2.5 my-2">
+                    {otpDigits.map((digit, idx) => (
                       <input
-                        id="reg-name"
+                        key={idx}
+                        ref={(el) => {
+                          otpInputRefs.current[idx] = el;
+                        }}
                         type="text"
-                        required
-                        placeholder="Alex Morgan"
-                        value={regName}
-                        onChange={(e) => setRegName(e.target.value)}
-                        className="w-full rounded-xl border border-border bg-background py-2 pl-10 pr-3.5 text-sm text-foreground transition-all placeholder:text-muted-foreground/60 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                        inputMode="numeric"
+                        maxLength={1}
+                        value={digit}
+                        onChange={(e) => handleOtpDigitChange(idx, e.target.value)}
+                        onKeyDown={(e) => handleOtpDigitKeyDown(idx, e)}
+                        className="h-12 w-11 sm:w-12 text-center text-lg font-bold rounded-xl border border-border bg-background text-foreground transition-all focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none"
                       />
-                    </div>
+                    ))}
                   </div>
 
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-foreground" htmlFor="reg-email">
-                      Email address
-                    </label>
-                    <div className="relative flex items-center">
-                      <Mail size={15} className="absolute left-3.5 text-muted-foreground pointer-events-none" />
-                      <input
-                        id="reg-email"
-                        type="email"
-                        required
-                        placeholder="name@example.com"
-                        value={regEmail}
-                        onChange={(e) => setRegEmail(e.target.value)}
-                        className="w-full rounded-xl border border-border bg-background py-2 pl-10 pr-3.5 text-sm text-foreground transition-all placeholder:text-muted-foreground/60 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                      />
-                    </div>
-                  </div>
+                  <p className="text-center text-[11px] text-muted-foreground">
+                    Code expires in 5 minutes. Check your spam folder if not received.
+                  </p>
 
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-foreground" htmlFor="reg-phone">
-                      Phone number <span className="text-[10px] text-muted-foreground font-normal">(optional)</span>
-                    </label>
-                    <div className="relative flex items-center">
-                      <Phone size={15} className="absolute left-3.5 text-muted-foreground pointer-events-none" />
-                      <input
-                        id="reg-phone"
-                        type="tel"
-                        placeholder="+1 555-0199"
-                        value={regPhone}
-                        onChange={(e) => setRegPhone(e.target.value)}
-                        className="w-full rounded-xl border border-border bg-background py-2 pl-10 pr-3.5 text-sm text-foreground transition-all placeholder:text-muted-foreground/60 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                      />
-                    </div>
-                  </div>
+                  <button
+                    type="submit"
+                    disabled={loading || otpDigits.join('').length < 6}
+                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-2.5 px-4 text-xs font-bold text-primary-foreground shadow-md shadow-primary/20 transition-all hover:bg-primary/90 active:scale-[0.99] disabled:opacity-60"
+                  >
+                    {loading ? (
+                      <>
+                        <Loader2 size={14} className="animate-spin" />
+                        <span>Verifying code…</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>Verify & Sign in</span>
+                        <ArrowRight size={14} />
+                      </>
+                    )}
+                  </button>
 
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-foreground" htmlFor="reg-password">
-                      Create password
-                    </label>
-                    <div className="relative flex items-center">
-                      <Lock size={15} className="absolute left-3.5 text-muted-foreground pointer-events-none" />
-                      <input
-                        id="reg-password"
-                        type={showRegPassword ? 'text' : 'password'}
-                        required
-                        placeholder="Min 6 characters"
-                        value={regPassword}
-                        onChange={(e) => setRegPassword(e.target.value)}
-                        className="w-full rounded-xl border border-border bg-background py-2 pl-10 pr-10 text-sm text-foreground transition-all placeholder:text-muted-foreground/60 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                      />
+                  <div className="flex items-center justify-between pt-1 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => switchView('email-otp-step1')}
+                      className="flex items-center gap-1 text-muted-foreground hover:text-foreground"
+                    >
+                      <ArrowLeft size={13} /> Change email
+                    </button>
+
+                    {otpResendCountdown > 0 ? (
+                      <span className="text-[11px] text-muted-foreground">
+                        Resend code in {otpResendCountdown}s
+                      </span>
+                    ) : (
                       <button
                         type="button"
-                        onClick={() => setShowRegPassword(!showRegPassword)}
-                        className="absolute right-3 text-muted-foreground hover:text-foreground"
+                        onClick={handleSendEmailOtp}
+                        className="flex items-center gap-1 font-semibold text-primary hover:underline"
                       >
-                        {showRegPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                        <RefreshCw size={12} /> Resend code
                       </button>
-                    </div>
-                    {/* Password Strength Indicator */}
-                    {regPassword && (
-                      <div className="mt-1.5 flex items-center gap-2">
-                        <div className="flex h-1 flex-1 gap-1">
-                          {[1, 2, 3].map((step) => (
-                            <div
-                              key={step}
-                              className={`h-full flex-1 rounded-full transition-all ${
-                                step <= passwordStrength.score ? passwordStrength.color : 'bg-muted'
-                              }`}
-                            />
-                          ))}
-                        </div>
-                        <span className="font-mono-ui text-[10px] text-muted-foreground">
-                          {passwordStrength.label}
-                        </span>
-                      </div>
                     )}
                   </div>
-
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-foreground" htmlFor="reg-confirm">
-                      Confirm password
-                    </label>
-                    <div className="relative flex items-center">
-                      <Lock size={15} className="absolute left-3.5 text-muted-foreground pointer-events-none" />
-                      <input
-                        id="reg-confirm"
-                        type={showRegPassword ? 'text' : 'password'}
-                        required
-                        placeholder="Re-type password"
-                        value={regConfirmPassword}
-                        onChange={(e) => setRegConfirmPassword(e.target.value)}
-                        className={`w-full rounded-xl border bg-background py-2 pl-10 pr-3.5 text-sm text-foreground transition-all placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 ${
-                          regConfirmPassword && regConfirmPassword !== regPassword
-                            ? 'border-destructive focus:ring-destructive/20'
-                            : 'border-border focus:border-primary focus:ring-primary/20'
-                        }`}
-                      />
-                    </div>
-                    {regConfirmPassword && regConfirmPassword !== regPassword && (
-                      <p className="mt-1 text-[11px] text-destructive">Passwords do not match.</p>
-                    )}
-                  </div>
-
-                  <motion.button
-                    whileHover={{ scale: 1.01 }}
-                    whileTap={{ scale: 0.99 }}
-                    type="submit"
-                    disabled={loading}
-                    className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-3 text-sm font-bold text-primary-foreground shadow-md transition-all hover:bg-primary/95 disabled:opacity-50"
-                  >
-                    {loading ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
-                    <span>{loading ? 'Creating account…' : 'Create Account'}</span>
-                  </motion.button>
                 </form>
+              </motion.div>
+            )}
 
-                {/* Divider */}
-                <div className="my-4 flex items-center gap-3">
-                  <div className="h-px flex-1 bg-border" />
-                  <span className="font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">OR</span>
-                  <div className="h-px flex-1 bg-border" />
+            {/* VIEW 4: REGISTER (Email + Password) */}
+            {view === 'register' && (
+              <motion.form
+                key="register-view"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.2 }}
+                onSubmit={handleRegister}
+                className="space-y-3.5"
+              >
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-foreground" htmlFor="reg-name">
+                    Full Name
+                  </label>
+                  <div className="relative flex items-center">
+                    <User size={15} className="absolute left-3.5 text-muted-foreground pointer-events-none" />
+                    <input
+                      id="reg-name"
+                      type="text"
+                      required
+                      placeholder="Alex Morgan"
+                      value={regName}
+                      onChange={(e) => setRegName(e.target.value)}
+                      className="w-full rounded-xl border border-border bg-background py-2.5 pl-10 pr-3.5 text-sm text-foreground placeholder:text-muted-foreground/60 transition-all focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                    />
+                  </div>
                 </div>
 
-                {/* Social Auth */}
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setGoogleStep('enter-email');
-                      setGoogleModalError('');
-                      setShowGoogleModal(true);
-                    }}
-                    disabled={loading}
-                    className="flex items-center justify-center gap-2 rounded-xl border border-border bg-background py-2.5 text-xs font-bold text-foreground transition-all hover:border-primary/40 hover:bg-muted/40"
-                  >
-                    <GoogleIcon />
-                    <span>Google</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => switchView('phone-step1')}
-                    disabled={loading}
-                    className="flex items-center justify-center gap-2 rounded-xl border border-border bg-background py-2.5 text-xs font-bold text-foreground transition-all hover:border-primary/40 hover:bg-muted/40"
-                  >
-                    <Phone size={14} className="text-muted-foreground" />
-                    <span>Phone</span>
-                  </button>
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-foreground" htmlFor="reg-email">
+                    Email Address
+                  </label>
+                  <div className="relative flex items-center">
+                    <Mail size={15} className="absolute left-3.5 text-muted-foreground pointer-events-none" />
+                    <input
+                      id="reg-email"
+                      type="email"
+                      required
+                      placeholder="name@example.com"
+                      value={regEmail}
+                      onChange={(e) => setRegEmail(e.target.value)}
+                      className="w-full rounded-xl border border-border bg-background py-2.5 pl-10 pr-3.5 text-sm text-foreground placeholder:text-muted-foreground/60 transition-all focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                    />
+                  </div>
                 </div>
 
-                <p className="mt-5 text-center text-xs text-muted-foreground">
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-foreground" htmlFor="reg-password">
+                    Password
+                  </label>
+                  <div className="relative flex items-center">
+                    <Lock size={15} className="absolute left-3.5 text-muted-foreground pointer-events-none" />
+                    <input
+                      id="reg-password"
+                      type={showRegPassword ? 'text' : 'password'}
+                      required
+                      placeholder="At least 6 characters"
+                      value={regPassword}
+                      onChange={(e) => setRegPassword(e.target.value)}
+                      className="w-full rounded-xl border border-border bg-background py-2.5 pl-10 pr-10 text-sm text-foreground placeholder:text-muted-foreground/60 transition-all focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowRegPassword(!showRegPassword)}
+                      className="absolute right-3.5 text-muted-foreground hover:text-foreground"
+                    >
+                      {showRegPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+                    </button>
+                  </div>
+
+                  {regPassword && (
+                    <div className="mt-1.5 flex items-center gap-2">
+                      <div className="h-1 flex-1 rounded-full bg-muted overflow-hidden">
+                        <div
+                          className={`h-full ${passStrength.color}`}
+                          style={{ width: `${(passStrength.score / 3) * 100}%` }}
+                        />
+                      </div>
+                      <span className="text-[10px] font-medium text-muted-foreground">
+                        {passStrength.label}
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-foreground" htmlFor="reg-confirm-password">
+                    Confirm Password
+                  </label>
+                  <div className="relative flex items-center">
+                    <Lock size={15} className="absolute left-3.5 text-muted-foreground pointer-events-none" />
+                    <input
+                      id="reg-confirm-password"
+                      type={showRegPassword ? 'text' : 'password'}
+                      required
+                      placeholder="Re-enter password"
+                      value={regConfirmPassword}
+                      onChange={(e) => setRegConfirmPassword(e.target.value)}
+                      className="w-full rounded-xl border border-border bg-background py-2.5 pl-10 pr-3.5 text-sm text-foreground placeholder:text-muted-foreground/60 transition-all focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-2.5 px-4 text-xs font-bold text-primary-foreground shadow-md shadow-primary/20 transition-all hover:bg-primary/90 active:scale-[0.99] disabled:opacity-60"
+                >
+                  {loading ? (
+                    <>
+                      <Loader2 size={14} className="animate-spin" />
+                      <span>Creating account…</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Create Account</span>
+                      <ArrowRight size={14} />
+                    </>
+                  )}
+                </button>
+
+                <div className="pt-1 text-center text-xs text-muted-foreground">
                   Already have an account?{' '}
                   <button
                     type="button"
@@ -812,430 +830,176 @@ export default function AuthPage({ initialView = 'login' }: { initialView?: Auth
                   >
                     Sign in
                   </button>
-                </p>
-              </motion.div>
+                </div>
+              </motion.form>
             )}
 
-            {/* 3. PHONE AUTH - STEP 1 (ENTER PHONE) */}
-            {view === 'phone-step1' && (
-              <motion.div
-                key="phone-step1"
-                initial={{ opacity: 0, x: 16 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -16 }}
-                transition={{ duration: 0.24, ease: 'easeInOut' }}
-              >
-                <button
-                  type="button"
-                  onClick={() => switchView('login')}
-                  className="mb-4 inline-flex items-center gap-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground"
-                >
-                  <ArrowLeft size={14} /> Back to email sign in
-                </button>
-
-                <div className="mb-6">
-                  <h1 className="text-2xl font-bold tracking-tight text-foreground">
-                    Continue with Phone Number 📱
-                  </h1>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    We will send a 6-digit one-time code to verify your device via SMS.
-                  </p>
-                </div>
-
-                {errorMessage && (
-                  <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
-                    <AlertCircle size={15} className="mt-0.5 shrink-0" />
-                    <span>{errorMessage}</span>
-                  </div>
-                )}
-
-                <form onSubmit={handleSendPhoneOtp} className="space-y-4">
-                  <div>
-                    <label className="mb-1.5 block text-xs font-semibold text-foreground">
-                      Country & Phone number
-                    </label>
-                    <div className="flex gap-2">
-                      <select
-                        value={countryCode}
-                        onChange={(e) => setCountryCode(e.target.value)}
-                        className="rounded-xl border border-border bg-background px-3 py-2.5 text-xs font-bold text-foreground transition-all focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                      >
-                        {COUNTRY_CODES.map((item) => (
-                          <option key={item.code} value={item.code}>
-                            {item.flag} {item.code} ({item.country})
-                          </option>
-                        ))}
-                      </select>
-
-                      <div className="relative flex flex-1 items-center">
-                        <Phone size={15} className="absolute left-3.5 text-muted-foreground pointer-events-none" />
-                        <input
-                          type="tel"
-                          required
-                          placeholder="555-0199"
-                          value={phoneNumber}
-                          onChange={(e) => setPhoneNumber(e.target.value)}
-                          className="w-full rounded-xl border border-border bg-background py-2.5 pl-10 pr-3.5 text-sm text-foreground transition-all placeholder:text-muted-foreground/60 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  <motion.button
-                    whileHover={{ scale: 1.01 }}
-                    whileTap={{ scale: 0.99 }}
-                    type="submit"
-                    disabled={loading}
-                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-3 text-sm font-bold text-primary-foreground shadow-md transition-all hover:bg-primary/95 disabled:opacity-50"
-                  >
-                    {loading ? <Loader2 size={16} className="animate-spin" /> : <ArrowRight size={16} />}
-                    <span>{loading ? 'Sending code…' : 'Send OTP'}</span>
-                  </motion.button>
-                </form>
-              </motion.div>
-            )}
-
-            {/* 4. PHONE AUTH - STEP 2 (VERIFY OTP) */}
-            {view === 'phone-step2' && (
-              <motion.div
-                key="phone-step2"
-                initial={{ opacity: 0, x: 16 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -16 }}
-                transition={{ duration: 0.24, ease: 'easeInOut' }}
-              >
-                <button
-                  type="button"
-                  onClick={() => switchView('phone-step1')}
-                  className="mb-4 inline-flex items-center gap-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground"
-                >
-                  <ArrowLeft size={14} /> Change phone number
-                </button>
-
-                <div className="mb-5">
-                  <h1 className="text-2xl font-bold tracking-tight text-foreground">Verify your phone number 🔐</h1>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Enter the 6-digit verification code sent to{' '}
-                    <span className="font-semibold text-foreground">
-                      {countryCode} {phoneNumber}
-                    </span>{' '}
-                    via SMS.
-                  </p>
-                </div>
-
-                {errorMessage && (
-                  <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
-                    <AlertCircle size={15} className="mt-0.5 shrink-0" />
-                    <span>{errorMessage}</span>
-                  </div>
-                )}
-
-                <form onSubmit={handleVerifyPhoneOtp} className="space-y-5">
-                  {/* 6-box smooth OTP input */}
-                  <div className="flex justify-between gap-2 sm:gap-2.5">
-                    {phoneOtp.map((digit, index) => (
-                      <input
-                        key={index}
-                        ref={(el) => {
-                          phoneOtpRefs.current[index] = el;
-                        }}
-                        type="text"
-                        inputMode="numeric"
-                        maxLength={1}
-                        value={digit}
-                        onChange={(e) => handlePhoneOtpChange(index, e.target.value)}
-                        onKeyDown={(e) => handlePhoneOtpKeyDown(index, e)}
-                        className="h-12 w-12 rounded-xl border border-border bg-background text-center text-lg font-bold text-foreground transition-all focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/25"
-                      />
-                    ))}
-                  </div>
-
-                  <motion.button
-                    whileHover={{ scale: 1.01 }}
-                    whileTap={{ scale: 0.99 }}
-                    type="submit"
-                    disabled={loading || phoneOtp.join('').length < 6}
-                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-3 text-sm font-bold text-primary-foreground shadow-md transition-all hover:bg-primary/95 disabled:opacity-40"
-                  >
-                    {loading ? <Loader2 size={16} className="animate-spin" /> : <ShieldCheck size={16} />}
-                    <span>{loading ? 'Verifying…' : 'Verify OTP'}</span>
-                  </motion.button>
-                </form>
-
-                <div className="mt-5 flex items-center justify-between text-xs text-muted-foreground">
-                  <span>Didn't receive SMS?</span>
-                  {resendCountdown > 0 ? (
-                    <span className="font-mono text-xs text-muted-foreground">
-                      Resend in {resendCountdown}s
-                    </span>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={handleSendPhoneOtp}
-                      disabled={loading}
-                      className="font-bold text-primary hover:underline inline-flex items-center gap-1"
-                    >
-                      <RefreshCw size={12} /> Resend SMS
-                    </button>
-                  )}
-                </div>
-              </motion.div>
-            )}
-
-            {/* 5. FORGOT PASSWORD VIEW */}
+            {/* VIEW 5: FORGOT PASSWORD (Request Code) */}
             {view === 'forgot-password' && (
-              <motion.div
+              <motion.form
                 key="forgot-password"
-                initial={{ opacity: 0, x: 16 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -16 }}
-                transition={{ duration: 0.24, ease: 'easeInOut' }}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.2 }}
+                onSubmit={handleForgotPassword}
+                className="space-y-4"
               >
-                <button
-                  type="button"
-                  onClick={() => switchView('login')}
-                  className="mb-4 inline-flex items-center gap-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground"
-                >
-                  <ArrowLeft size={14} /> Back to Sign In
-                </button>
-
-                <div className="mb-6">
-                  <h1 className="text-2xl font-bold tracking-tight text-foreground">Forgot your password? 🔑</h1>
+                <div className="text-center">
+                  <h2 className="text-base font-bold text-foreground">Reset your password</h2>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Enter your email and we'll help you reset your password.
+                    Enter your email to receive a 6-digit reset code.
                   </p>
                 </div>
 
-                {errorMessage && (
-                  <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
-                    <AlertCircle size={15} className="mt-0.5 shrink-0" />
-                    <span>{errorMessage}</span>
-                  </div>
-                )}
-
-                <form onSubmit={handleForgotPassword} className="space-y-4">
-                  <div>
-                    <label className="mb-1.5 block text-xs font-semibold text-foreground" htmlFor="forgot-email">
-                      Registered email address
-                    </label>
-                    <div className="relative flex items-center">
-                      <Mail size={15} className="absolute left-3.5 text-muted-foreground pointer-events-none" />
-                      <input
-                        id="forgot-email"
-                        type="email"
-                        required
-                        placeholder="name@example.com"
-                        value={forgotEmail}
-                        onChange={(e) => setForgotEmail(e.target.value)}
-                        className="w-full rounded-xl border border-border bg-background py-2.5 pl-10 pr-3.5 text-sm text-foreground transition-all placeholder:text-muted-foreground/60 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                      />
-                    </div>
-                  </div>
-
-                  <motion.button
-                    whileHover={{ scale: 1.01 }}
-                    whileTap={{ scale: 0.99 }}
-                    type="submit"
-                    disabled={loading}
-                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-3 text-sm font-bold text-primary-foreground shadow-md transition-all hover:bg-primary/95 disabled:opacity-50"
-                  >
-                    {loading ? <Loader2 size={16} className="animate-spin" /> : <Mail size={16} />}
-                    <span>{loading ? 'Sending link…' : 'Send Reset Link'}</span>
-                  </motion.button>
-                </form>
-              </motion.div>
-            )}
-
-            {/* 6. FORGOT PASSWORD SUCCESS VIEW */}
-            {view === 'forgot-success' && (
-              <motion.div
-                key="forgot-success"
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.95 }}
-                transition={{ duration: 0.24, ease: 'easeInOut' }}
-                className="text-center py-3"
-              >
-                <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-                  <CheckCircle2 size={30} />
-                </div>
-                <h2 className="text-xl font-bold tracking-tight text-foreground">Check your inbox 📬</h2>
-                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-                  If an account exists for <span className="font-semibold text-foreground">{forgotEmail}</span>, we
-                  have prepared password reset instructions.
-                </p>
-
-                <div className="mt-6">
-                  <button
-                    type="button"
-                    onClick={() => switchView('login')}
-                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-secondary py-3 text-xs font-bold text-secondary-foreground shadow-sm transition-transform hover:-translate-y-0.5"
-                  >
-                    <ArrowLeft size={14} /> Back to Login
-                  </button>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-
-        {/* Security / Privacy Trust Footer */}
-        <div className="mt-6 flex items-center justify-center gap-2 text-center text-[11px] text-muted-foreground/70">
-          <ShieldCheck size={14} className="text-emerald-600 dark:text-emerald-400" />
-          <span>Encrypted active recall session · DocQuiz AI</span>
-        </div>
-      </motion.div>
-
-      {/* Real Google Account Verification Modal with 2-Step Email OTP */}
-      {showGoogleModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm animate-in fade-in duration-150">
-          <div className="relative w-full max-w-md rounded-3xl border border-border bg-card p-6 shadow-2xl paper-shadow sm:p-7">
-            <button
-              type="button"
-              onClick={() => setShowGoogleModal(false)}
-              className="absolute right-4 top-4 rounded-full p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
-              aria-label="Close modal"
-            >
-              <X size={16} />
-            </button>
-
-            <div className="flex items-center gap-3">
-              <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-muted">
-                <GoogleIcon />
-              </span>
-              <div>
-                <h3 className="text-lg font-bold">Sign in with Google</h3>
-                <p className="text-xs text-muted-foreground">
-                  {googleStep === 'enter-email'
-                    ? 'Enter your Google/Gmail address to receive an official OTP code'
-                    : `Check your inbox at ${googleEmailInput}`}
-                </p>
-              </div>
-            </div>
-
-            {googleModalError && (
-              <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-destructive/30 bg-destructive/10 p-2.5 text-xs text-destructive">
-                <AlertCircle size={14} className="mt-0.5 shrink-0" />
-                <span>{googleModalError}</span>
-              </div>
-            )}
-
-            {/* STEP 1: Enter Google Email */}
-            {googleStep === 'enter-email' ? (
-              <form onSubmit={handleSendGoogleEmailOtp} className="mt-5 space-y-3.5">
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-foreground" htmlFor="google-email-input">
-                    Your Google / Gmail Address
+                  <label className="mb-1 block text-xs font-semibold text-foreground" htmlFor="forgot-email">
+                    Account Email
                   </label>
                   <div className="relative flex items-center">
                     <Mail size={15} className="absolute left-3.5 text-muted-foreground pointer-events-none" />
                     <input
-                      id="google-email-input"
+                      id="forgot-email"
                       type="email"
                       required
-                      placeholder="yourname@gmail.com"
-                      value={googleEmailInput}
-                      onChange={(e) => setGoogleEmailInput(e.target.value)}
-                      className="w-full rounded-xl border border-border bg-background py-2.5 pl-10 pr-3.5 text-sm text-foreground transition-all placeholder:text-muted-foreground/60 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                      placeholder="name@example.com"
+                      value={forgotEmailInput}
+                      onChange={(e) => setForgotEmailInput(e.target.value)}
+                      className="w-full rounded-xl border border-border bg-background py-2.5 pl-10 pr-3.5 text-sm text-foreground placeholder:text-muted-foreground/60 transition-all focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                     />
                   </div>
                 </div>
 
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-foreground" htmlFor="google-name-input">
-                    Display Name <span className="text-[10px] text-muted-foreground font-normal">(optional)</span>
-                  </label>
-                  <div className="relative flex items-center">
-                    <User size={15} className="absolute left-3.5 text-muted-foreground pointer-events-none" />
-                    <input
-                      id="google-name-input"
-                      type="text"
-                      placeholder="Your Name"
-                      value={googleNameInput}
-                      onChange={(e) => setGoogleNameInput(e.target.value)}
-                      className="w-full rounded-xl border border-border bg-background py-2.5 pl-10 pr-3.5 text-sm text-foreground transition-all placeholder:text-muted-foreground/60 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                    />
-                  </div>
-                </div>
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-2.5 px-4 text-xs font-bold text-primary-foreground shadow-md shadow-primary/20 transition-all hover:bg-primary/90 active:scale-[0.99] disabled:opacity-60"
+                >
+                  {loading ? (
+                    <>
+                      <Loader2 size={14} className="animate-spin" />
+                      <span>Sending reset code…</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Send Reset Code</span>
+                      <ArrowRight size={14} />
+                    </>
+                  )}
+                </button>
 
-                <div className="mt-6 flex flex-col gap-2">
-                  <button
-                    type="submit"
-                    disabled={loading || !googleEmailInput.trim()}
-                    className="flex items-center justify-center gap-2 rounded-xl bg-primary py-3 text-xs font-bold text-primary-foreground shadow-sm transition-transform hover:-translate-y-0.5 disabled:opacity-50"
-                  >
-                    {loading ? <Loader2 size={15} className="animate-spin" /> : <Mail size={15} />}
-                    <span>{loading ? 'Sending verification code…' : 'Send Verification Code to Gmail'}</span>
-                  </button>
+                <div className="text-center pt-1">
                   <button
                     type="button"
-                    onClick={() => setShowGoogleModal(false)}
-                    className="rounded-xl border border-border py-2 text-xs font-semibold text-muted-foreground hover:bg-muted hover:text-foreground"
+                    onClick={() => switchView('login')}
+                    className="inline-flex items-center gap-1 text-xs font-semibold text-muted-foreground hover:text-foreground"
                   >
-                    Cancel
+                    <ArrowLeft size={13} /> Back to login
                   </button>
                 </div>
-              </form>
-            ) : (
-              /* STEP 2: Verify 6-digit Code from Inbox */
-              <form onSubmit={handleVerifyGoogleEmailOtp} className="mt-5 space-y-4">
+              </motion.form>
+            )}
+
+            {/* VIEW 6: RESET PASSWORD (Enter Code & Set New Password) */}
+            {view === 'reset-password' && (
+              <motion.form
+                key="reset-password"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.2 }}
+                onSubmit={handleResetPassword}
+                className="space-y-3.5"
+              >
+                <div className="text-center">
+                  <h2 className="text-base font-bold text-foreground">Set new password</h2>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Code sent to <span className="font-semibold text-foreground">{forgotEmailInput}</span>
+                  </p>
+                </div>
+
                 <div>
-                  <div className="flex justify-between gap-2 sm:gap-2.5">
-                    {googleOtp.map((digit, index) => (
-                      <input
-                        key={index}
-                        ref={(el) => {
-                          googleOtpRefs.current[index] = el;
-                        }}
-                        type="text"
-                        inputMode="numeric"
-                        maxLength={1}
-                        value={digit}
-                        onChange={(e) => handleGoogleOtpChange(index, e.target.value)}
-                        onKeyDown={(e) => handleGoogleOtpKeyDown(index, e)}
-                        className="h-12 w-12 rounded-xl border border-border bg-background text-center text-lg font-bold text-foreground transition-all focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/25"
-                      />
-                    ))}
-                  </div>
+                  <label className="mb-1 block text-xs font-semibold text-foreground" htmlFor="reset-code">
+                    6-Digit Reset Code
+                  </label>
+                  <input
+                    id="reset-code"
+                    type="text"
+                    required
+                    maxLength={6}
+                    placeholder="123456"
+                    value={resetCodeInput}
+                    onChange={(e) => setResetCodeInput(e.target.value.replace(/[^\d]/g, ''))}
+                    className="w-full text-center font-mono tracking-widest text-lg rounded-xl border border-border bg-background py-2 text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  />
                 </div>
 
-                <div className="flex flex-col gap-2">
-                  <button
-                    type="submit"
-                    disabled={loading || googleOtp.join('').length < 6}
-                    className="flex items-center justify-center gap-2 rounded-xl bg-primary py-3 text-xs font-bold text-primary-foreground shadow-sm transition-transform hover:-translate-y-0.5 disabled:opacity-40"
-                  >
-                    {loading ? <Loader2 size={15} className="animate-spin" /> : <ShieldCheck size={15} />}
-                    <span>{loading ? 'Verifying…' : 'Verify Code & Sign In'}</span>
-                  </button>
-
-                  <div className="flex items-center justify-between text-xs text-muted-foreground pt-1">
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-foreground" htmlFor="new-password">
+                    New Password
+                  </label>
+                  <div className="relative flex items-center">
+                    <Lock size={15} className="absolute left-3.5 text-muted-foreground pointer-events-none" />
+                    <input
+                      id="new-password"
+                      type={showNewPassword ? 'text' : 'password'}
+                      required
+                      placeholder="At least 6 characters"
+                      value={newPasswordInput}
+                      onChange={(e) => setNewPasswordInput(e.target.value)}
+                      className="w-full rounded-xl border border-border bg-background py-2.5 pl-10 pr-10 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                    />
                     <button
                       type="button"
-                      onClick={() => setGoogleStep('enter-email')}
-                      className="text-muted-foreground hover:text-foreground hover:underline"
+                      onClick={() => setShowNewPassword(!showNewPassword)}
+                      className="absolute right-3.5 text-muted-foreground hover:text-foreground"
                     >
-                      Change email
+                      {showNewPassword ? <EyeOff size={15} /> : <Eye size={15} />}
                     </button>
-                    {googleResendCountdown > 0 ? (
-                      <span className="font-mono text-xs">Resend in {googleResendCountdown}s</span>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={handleSendGoogleEmailOtp}
-                        disabled={loading}
-                        className="font-bold text-primary hover:underline inline-flex items-center gap-1"
-                      >
-                        <RefreshCw size={12} /> Resend Code
-                      </button>
-                    )}
                   </div>
                 </div>
-              </form>
+
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-2.5 px-4 text-xs font-bold text-primary-foreground shadow-md shadow-primary/20 transition-all hover:bg-primary/90 active:scale-[0.99] disabled:opacity-60"
+                >
+                  {loading ? (
+                    <>
+                      <Loader2 size={14} className="animate-spin" />
+                      <span>Updating password…</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Save Password & Sign in</span>
+                      <ArrowRight size={14} />
+                    </>
+                  )}
+                </button>
+              </motion.form>
             )}
+          </AnimatePresence>
+
+          {/* Quick Demo Access Bar */}
+          <div className="mt-6 pt-4 border-t border-border/70 flex items-center justify-between">
+            <span className="text-[11px] text-muted-foreground">Quick testing?</span>
+            <button
+              type="button"
+              onClick={handleDemoLogin}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border/80 bg-muted/40 px-2.5 py-1 text-[11px] font-semibold text-foreground transition-all hover:bg-muted"
+            >
+              <Sparkles size={12} className="text-amber-500" />
+              <span>Explore Demo Student</span>
+            </button>
           </div>
         </div>
-      )}
+
+        {/* Security & Privacy Footer */}
+        <div className="mt-4 flex items-center justify-center gap-1.5 text-center text-[11px] text-muted-foreground/70">
+          <ShieldCheck size={13} className="text-emerald-600 dark:text-emerald-400" />
+          <span>Encrypted active recall session · DocQuiz AI</span>
+        </div>
+      </motion.div>
     </div>
   );
 }

@@ -11,6 +11,8 @@ interface AuthContextType {
   isLoading: boolean;
   login: (email: string, password: string) => Promise<AuthUser>;
   register: (name: string, email: string, phone: string, password: string) => Promise<AuthUser>;
+  sendEmailOtp: (email: string, name?: string) => Promise<{ message: string; email: string; expiresInSeconds: number }>;
+  verifyEmailOtp: (email: string, otp: string, name?: string) => Promise<AuthUser>;
   sendPhoneOtp: (countryCode: string, phoneNumber: string) => Promise<{ message: string; phone: string; expiresInSeconds: number }>;
   verifyPhoneOtp: (countryCode: string, phoneNumber: string, otp: string) => Promise<AuthUser>;
   sendGoogleEmailOtp: (email: string, name?: string) => Promise<{ message: string; email: string; expiresInSeconds: number }>;
@@ -18,7 +20,8 @@ interface AuthContextType {
   loginWithGoogleOAuth: (params: { credential?: string; email?: string; name?: string; avatarUrl?: string }) => Promise<AuthUser>;
   loginWithGoogle: (params: { email: string; name?: string; avatarUrl?: string }) => Promise<AuthUser>;
   demoLogin: () => Promise<AuthUser>;
-  forgotPassword: (email: string) => Promise<{ message: string; email: string }>;
+  forgotPassword: (email: string) => Promise<{ message: string; email: string; status: string }>;
+  resetPassword: (email: string, code: string, newPassword: string) => Promise<AuthUser>;
   logout: () => Promise<void>;
 }
 
@@ -73,6 +76,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return newUser;
   };
 
+  const sendEmailOtp = async (email: string, name?: string) => {
+    return await authService.sendEmailOtp(email, name);
+  };
+
+  const verifyEmailOtp = async (email: string, otp: string, name?: string) => {
+    const { token: newToken, user: newUser } = await authService.verifyEmailOtp(email, otp, name);
+    saveSession(newToken, newUser);
+    return newUser;
+  };
+
   const sendPhoneOtp = async (countryCode: string, phoneNumber: string) => {
     return await authService.sendPhoneOtp(countryCode, phoneNumber);
   };
@@ -113,6 +126,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return await authService.forgotPassword(email);
   };
 
+  const resetPassword = async (email: string, code: string, newPassword: string) => {
+    const { token: newToken, user: newUser } = await authService.resetPassword(email, code, newPassword);
+    saveSession(newToken, newUser);
+    return newUser;
+  };
+
   const logout = async () => {
     await authService.logout(token);
     clearSession();
@@ -127,6 +146,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isLoading,
         login,
         register,
+        sendEmailOtp,
+        verifyEmailOtp,
         sendPhoneOtp,
         verifyPhoneOtp,
         sendGoogleEmailOtp,
@@ -135,6 +156,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         loginWithGoogle,
         demoLogin,
         forgotPassword,
+        resetPassword,
         logout,
       }}
     >

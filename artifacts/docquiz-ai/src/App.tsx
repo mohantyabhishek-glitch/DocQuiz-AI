@@ -55,8 +55,11 @@ function Router() {
         <Route path="/register">
           {() => <AuthPage initialView="register" />}
         </Route>
+        <Route path="/otp-login">
+          {() => <AuthPage initialView="email-otp-step1" />}
+        </Route>
         <Route path="/phone-login">
-          {() => <AuthPage initialView="phone-step1" />}
+          {() => <AuthPage initialView="email-otp-step1" />}
         </Route>
         <Route path="/forgot-password">
           {() => <AuthPage initialView="forgot-password" />}

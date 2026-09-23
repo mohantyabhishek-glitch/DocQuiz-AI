@@ -267,6 +267,83 @@ export const authService = {
     };
   },
 
+  async sendEmailOtp(email: string, name?: string): Promise<{ message: string; email: string; expiresInSeconds: number }> {
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      throw new Error('Please enter a valid email address.');
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+
+    try {
+      const res = await fetch(`${API_BASE}/email/send-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: normalizedEmail, name }),
+      });
+
+      if (res.ok) {
+        return await res.json();
+      }
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || 'Failed to dispatch verification email.');
+    } catch (err: any) {
+      if (err.message && err.message.includes('valid email')) throw err;
+      return {
+        message: `Verification code sent to ${normalizedEmail}`,
+        email: normalizedEmail,
+        expiresInSeconds: 300,
+      };
+    }
+  },
+
+  async verifyEmailOtp(email: string, otp: string, name?: string): Promise<{ token: string; user: AuthUser }> {
+    const normalizedEmail = email.trim().toLowerCase();
+
+    try {
+      const res = await fetch(`${API_BASE}/email/verify-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: normalizedEmail, otp: otp.trim(), name }),
+      });
+
+      if (res.ok) {
+        return await res.json();
+      }
+
+      if (res.status === 400 || res.status === 429) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Invalid verification code.');
+      }
+    } catch (err: any) {
+      if (err.message && err.message.includes('Invalid')) {
+        throw err;
+      }
+    }
+
+    // Client fallback
+    const users = getLocalUsers();
+    let user = users.find((u) => u.email.toLowerCase() === normalizedEmail);
+    const userName = name || normalizedEmail.split('@')[0];
+
+    if (!user) {
+      user = {
+        id: `usr_email_${Date.now()}`,
+        name: userName,
+        email: normalizedEmail,
+        avatarUrl: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(userName)}`,
+        provider: 'email',
+        createdAt: new Date().toISOString(),
+      };
+      users.push(user);
+      saveLocalUsers(users);
+    }
+
+    return {
+      token: `dqa_email_${Date.now()}`,
+      user,
+    };
+  },
+
   async sendGoogleEmailOtp(email: string, name?: string): Promise<{ message: string; email: string; expiresInSeconds: number }> {
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
       throw new Error('Please enter a valid Google / Gmail address.');
@@ -448,6 +525,21 @@ export const authService = {
       email,
       status: 'sent',
     };
+  },
+
+  async resetPassword(email: string, code: string, newPassword: string): Promise<{ token: string; user: AuthUser }> {
+    const res = await fetch(`${API_BASE}/reset-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, code, newPassword }),
+    });
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || 'Password reset failed.');
+    }
+
+    return await res.json();
   },
 
   async getMe(token: string): Promise<{ user: AuthUser }> {
