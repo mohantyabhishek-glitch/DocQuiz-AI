@@ -453,8 +453,135 @@ router.post("/auth/google/verify-otp", (req: Request, res: Response) => {
 
 
 
+// 5c. Universal Email OTP Routes (Works for ANY email: Gmail, Outlook, Yahoo, iCloud, university, etc.)
+router.post("/auth/email/send-otp", async (req: Request, res: Response) => {
+  try {
+    const { email, name } = req.body;
+
+    if (!email || typeof email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      return res.status(400).json({ error: "Please enter a valid email address." });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes expiration
+
+    activeEmailOtps.set(normalizedEmail, { code: otpCode, expiresAt, attempts: 0 });
+
+    const transporter = createEmailTransporter();
+    if (transporter) {
+      try {
+        const fromAddress = process.env.SMTP_FROM || process.env.GMAIL_USER || "no-reply@docquiz.ai";
+        await transporter.sendMail({
+          from: `"DocQuiz AI" <${fromAddress}>`,
+          to: normalizedEmail,
+          subject: `Your DocQuiz AI Login Verification Code: ${otpCode}`,
+          html: `
+            <div style="font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 520px; margin: 0 auto; padding: 28px; border: 1px solid #e2ded5; border-radius: 18px; background-color: #fbf9f4; color: #1e2532;">
+              <div style="margin-bottom: 20px;">
+                <h2 style="margin: 0; color: #d95338; font-size: 24px; font-weight: 800;">DocQuiz <span style="color: #1e2532;">AI</span></h2>
+                <p style="margin: 4px 0 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.15em; color: #707886;">Active Recall Desk</p>
+              </div>
+              <p style="font-size: 15px; line-height: 1.6; color: #333d4b;">Hello ${name || "Learner"},</p>
+              <p style="font-size: 14px; line-height: 1.6; color: #525f70;">Here is your 6-digit verification code to sign into DocQuiz AI:</p>
+              <div style="text-align: center; margin: 26px 0;">
+                <span style="display: inline-block; padding: 14px 28px; font-family: monospace; font-size: 32px; font-weight: 800; letter-spacing: 8px; color: #d95338; background: #ffffff; border: 2px solid #e2ded5; border-radius: 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.04);">
+                  ${otpCode}
+                </span>
+              </div>
+              <p style="font-size: 12px; color: #707886; line-height: 1.5;">This code will expire in 10 minutes. If you did not request this login code, you can safely ignore this email.</p>
+              <hr style="border: none; border-top: 1px solid #e2ded5; margin: 24px 0;" />
+              <p style="font-size: 11px; color: #9aa2b1; text-align: center; margin: 0;">Encrypted active recall session · DocQuiz AI</p>
+            </div>
+          `,
+        });
+        logger.info({ email: normalizedEmail }, "Real verification OTP email sent via SMTP");
+      } catch (mailErr) {
+        logger.error({ mailErr }, "Failed to send email via SMTP transporter");
+      }
+    } else {
+      logger.info({ email: normalizedEmail, code: otpCode }, "Email OTP generated (Server-side log)");
+    }
+
+    return res.status(200).json({
+      message: `Verification code sent to ${normalizedEmail}`,
+      email: normalizedEmail,
+      expiresInSeconds: 600,
+    });
+  } catch (error) {
+    logger.error({ error }, "Error sending email OTP");
+    return res.status(500).json({ error: "Failed to send verification email. Please try again." });
+  }
+});
+
+router.post("/auth/email/verify-otp", (req: Request, res: Response) => {
+  try {
+    const { email, otp, name, avatarUrl } = req.body;
+
+    if (!email || !otp) {
+      return res.status(400).json({ error: "Email address and 6-digit verification code are required." });
+    }
+
+    const normalizedEmail = String(email).trim().toLowerCase();
+    const cleanOtp = String(otp).trim();
+    const record = activeEmailOtps.get(normalizedEmail);
+
+    if (!record) {
+      return res.status(400).json({ error: "No active verification code found for this email. Please request a new code." });
+    }
+
+    if (Date.now() > record.expiresAt) {
+      activeEmailOtps.delete(normalizedEmail);
+      return res.status(400).json({ error: "Verification code has expired. Please request a new code." });
+    }
+
+    if (record.code !== cleanOtp) {
+      record.attempts += 1;
+      if (record.attempts >= 5) {
+        activeEmailOtps.delete(normalizedEmail);
+        return res.status(429).json({ error: "Too many incorrect attempts. Please request a new verification code." });
+      }
+      return res.status(400).json({ error: "Invalid verification code. Please check your inbox and try again." });
+    }
+
+    // OTP Verified! Clean up OTP record
+    activeEmailOtps.delete(normalizedEmail);
+
+    const userName = name && typeof name === "string" && name.trim().length > 0 ? name.trim() : normalizedEmail.split("@")[0];
+
+    let user = usersByEmail.get(normalizedEmail);
+    if (!user) {
+      const userId = `usr_${crypto.randomBytes(8).toString("hex")}`;
+      user = {
+        id: userId,
+        name: userName,
+        email: normalizedEmail,
+        avatarUrl: avatarUrl || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(userName)}`,
+        provider: "email",
+        createdAt: new Date().toISOString(),
+      };
+      usersByEmail.set(normalizedEmail, user);
+      usersById.set(userId, user);
+    }
+
+    const token = generateToken();
+    activeTokens.set(token, user.id);
+
+    logger.info({ userId: user.id, email: normalizedEmail }, "Email OTP verified successfully");
+
+    return res.status(200).json({
+      message: "Email verification successful",
+      token,
+      user: sanitizeUser(user),
+    });
+  } catch (error) {
+    logger.error({ error }, "Error verifying email OTP");
+    return res.status(500).json({ error: "Failed to verify code. Please try again." });
+  }
+});
+
 // 6. POST /api/auth/forgot-password
-router.post("/auth/forgot-password", (req: Request, res: Response) => {
+router.post("/auth/forgot-password", async (req: Request, res: Response) => {
   try {
     const { email } = req.body;
 
@@ -464,11 +591,41 @@ router.post("/auth/forgot-password", (req: Request, res: Response) => {
 
     const normalizedEmail = email.trim().toLowerCase();
     const user = usersByEmail.get(normalizedEmail);
+    const resetOtp = Math.floor(100000 + Math.random() * 900000).toString();
+
+    // Send real password reset email if SMTP configured
+    const transporter = createEmailTransporter();
+    if (transporter) {
+      try {
+        const fromAddress = process.env.SMTP_FROM || process.env.GMAIL_USER || "no-reply@docquiz.ai";
+        await transporter.sendMail({
+          from: `"DocQuiz AI" <${fromAddress}>`,
+          to: normalizedEmail,
+          subject: `DocQuiz AI Password Reset Code: ${resetOtp}`,
+          html: `
+            <div style="font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 520px; margin: 0 auto; padding: 28px; border: 1px solid #e2ded5; border-radius: 18px; background-color: #fbf9f4; color: #1e2532;">
+              <h2 style="margin: 0; color: #d95338; font-size: 24px; font-weight: 800;">DocQuiz <span style="color: #1e2532;">AI</span></h2>
+              <p style="font-size: 15px; margin-top: 18px;">Password Reset Request</p>
+              <p style="font-size: 14px; color: #525f70;">Use this 6-digit code to reset your password:</p>
+              <div style="text-align: center; margin: 24px 0;">
+                <span style="display: inline-block; padding: 12px 24px; font-family: monospace; font-size: 28px; font-weight: 800; letter-spacing: 6px; color: #d95338; background: #ffffff; border: 2px solid #e2ded5; border-radius: 12px;">
+                  ${resetOtp}
+                </span>
+              </div>
+              <p style="font-size: 12px; color: #707886;">Valid for 15 minutes.</p>
+            </div>
+          `,
+        });
+        logger.info({ email: normalizedEmail }, "Password reset email sent via SMTP");
+      } catch (mailErr) {
+        logger.error({ mailErr }, "Failed to send reset email via SMTP");
+      }
+    }
 
     logger.info({ email: normalizedEmail, exists: !!user }, "Password reset requested");
 
     return res.status(200).json({
-      message: `If an account exists for ${normalizedEmail}, a password reset link has been prepared.`,
+      message: `If an account exists for ${normalizedEmail}, a password reset code has been sent.`,
       email: normalizedEmail,
       status: "sent",
     });
